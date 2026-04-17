@@ -641,7 +641,8 @@ function switchStab(name, btn) {
 // ================================================================
 // STATE
 // ================================================================
-let dailyFrame = null;
+let dailyFrame = null;   // headless callObject – tool calls + sendAppMessage
+let videoFrame = null;   // createFrame – video display + AI pinning
 let conversationId = null;
 let logCount = 0;
 let lastUserUtterance = '';
@@ -1203,10 +1204,15 @@ async function joinConversation(url) {
   const container = document.getElementById('daily-container');
   container.innerHTML = '';
 
-  // Clean up any previous frame
+  // Clean up any previous instances
+  if (videoFrame) {
+    try { await videoFrame.leave(); } catch {}
+    try { videoFrame.destroy(); } catch {}
+    videoFrame = null;
+  }
   if (dailyFrame) {
     try { await dailyFrame.leave(); } catch {}
-    try { await dailyFrame.destroy(); } catch {}
+    try { dailyFrame.destroy(); } catch {}
     dailyFrame = null;
   }
 
@@ -1226,7 +1232,7 @@ async function joinConversation(url) {
   }
 
   try {
-    // ── createFrame: Daily prebuilt UI med layout-kontroll ──
+    // ── INSTANCE 1: videoFrame (createFrame) – video + AI pinning ──
     const frame = window.DailyIframe.createFrame(container, {
       iframeStyle: {
         position: 'absolute', inset: '0',
@@ -1234,16 +1240,14 @@ async function joinConversation(url) {
       },
       showLeaveButton: false,
       showFullscreenButton: false,
-      // activeSpeakerMode pinner aktiv taler (AI) i stor visning
       activeSpeakerMode: true,
     });
-    dailyFrame = frame;
+    videoFrame = frame;
 
-    // ── Når AI-replikaen joiner: pin den med én gang ──
+    // Pin the AI replica as the main large view when it joins
     frame.on('participant-joined', evt => {
       if (!evt.participant.local) {
         try {
-          // pinParticipant setter AI-en som fastlåst storvisning
           frame.pinParticipant({ sessionId: evt.participant.session_id });
           dbgLog('daily', '✓ AI-replika pinnet som hovedvisning', {
             session_id: evt.participant.session_id,
@@ -1254,33 +1258,34 @@ async function joinConversation(url) {
         }
       }
     });
-
-    // ── Lytt på app-messages (tool calls, transkripsjon etc.) ──
-    frame.on('app-message', evt => handleAppMessage(evt.data));
     frame.on('joined-meeting', () => {
-      addLog('info', 'Daily.js tilkoblet ✓', {});
-      dbgLog('daily', 'joined-meeting ✓ – venter på AI-replika', {});
+      addLog('info', 'Daily.js video tilkoblet ✓', {});
+      dbgLog('daily', 'videoFrame joined-meeting ✓', {});
     });
     frame.on('error', e => {
-      addLog('info', 'Daily feil', {});
-      dbgLog('daily', 'Daily.js error', { error: e?.errorMsg || e }, true);
+      dbgLog('daily', 'videoFrame error', { error: e?.errorMsg || e }, true);
     });
 
+    // Join video frame first
     await Promise.race([
       frame.join({ url }),
-      new Promise((_, r) => setTimeout(() => r(new Error('timeout')), 20000)),
+      new Promise((_, r) => setTimeout(() => r(new Error('video-timeout')), 20000)),
     ]);
 
     clearTimeout(fallbackTimer);
     document.getElementById('v-starting').style.display = 'none';
     setStatus('active', 'Aktiv');
     addLog('info', 'Video tilkoblet ✓', {});
-    dbgLog('daily', 'Daily.js frame joined ✓ – AI vil pinnes automatisk ved inntreden', {});
+    dbgLog('daily', 'videoFrame joined ✓ – starter headless lytter for tool calls', {});
+
+    // ── INSTANCE 2: dailyFrame (callObject) – tool calls + sendAppMessage ──
+    // Headless: no audio/video tracks, joins same room to receive app-messages
+    startToolCallListener(url);
 
   } catch (err) {
-    // Fallback: rå iframe dersom createFrame feiler
+    // Fallback: raw iframe if createFrame fails
     clearTimeout(fallbackTimer);
-    if (dailyFrame) { try { dailyFrame.destroy(); } catch {} dailyFrame = null; }
+    if (videoFrame) { try { videoFrame.destroy(); } catch {} videoFrame = null; }
     container.innerHTML = '';
     const iframe = document.createElement('iframe');
     iframe.src = url;
@@ -1290,24 +1295,29 @@ async function joinConversation(url) {
     document.getElementById('v-starting').style.display = 'none';
     setStatus('active', 'Aktiv');
     addLog('info', 'Video åpnet (iframe fallback)', {});
-    dbgLog('daily', 'createFrame feilet, bruker iframe: ' + err?.message, {}, true);
-    // Separat headless lytter for tool calls
-    startFallbackListener(url);
+    dbgLog('daily', 'createFrame feilet, bruker iframe + headless: ' + err?.message, {}, true);
+    // Still spin up headless listener for tool calls
+    startToolCallListener(url);
   }
 }
 
-// Headless lytter – brukes kun hvis createFrame feiler
-async function startFallbackListener(url) {
+// ── Headless callObject for tool calls + sendAppMessage ──
+// Always started alongside the video frame so webhooks work reliably.
+async function startToolCallListener(url) {
   if (typeof window.DailyIframe === 'undefined') return;
   try {
     const call = window.DailyIframe.createCallObject({ audioSource: false, videoSource: false });
     dailyFrame = call;
     call.on('app-message', evt => handleAppMessage(evt.data));
-    call.on('error', e => dbgLog('daily', 'Fallback lytter feil', { error: e?.errorMsg }, true));
-    await Promise.race([call.join({ url }), new Promise((_, r) => setTimeout(() => r(), 15000))]);
-    dbgLog('daily', 'Fallback headless lytter aktiv ✓', {});
+    call.on('joined-meeting', () => dbgLog('daily', 'Headless lytter joined ✓ (tool calls aktiv)', {}));
+    call.on('error', e => dbgLog('daily', 'Headless lytter feil', { error: e?.errorMsg }, true));
+    await Promise.race([
+      call.join({ url }),
+      new Promise((_, r) => setTimeout(() => r(new Error('listener-timeout')), 20000)),
+    ]);
+    dbgLog('daily', 'Headless tool call lytter aktiv ✓', {});
   } catch (err) {
-    dbgLog('daily', 'Fallback lytter feilet: ' + err?.message, {}, true);
+    dbgLog('daily', 'Headless lytter feilet: ' + err?.message, {}, true);
   }
 }
 
@@ -1318,6 +1328,11 @@ let vcoTimerInterval=null,vcoSeconds=0;
 function startVcoTimer(){vcoSeconds=0;clearInterval(vcoTimerInterval);vcoTimerInterval=setInterval(()=>{vcoSeconds++;const m=String(Math.floor(vcoSeconds/60)).padStart(2,'0');const s=String(vcoSeconds%60).padStart(2,'0');const el=document.getElementById('vco-timer');if(el)el.textContent=m+':'+s;},1000);}
 async function stopConversation(){
   clearInterval(vcoTimerInterval);
+  if(videoFrame){
+    try{await videoFrame.leave();}catch{}
+    try{videoFrame.destroy();}catch{}
+    videoFrame=null;
+  }
   if(dailyFrame){
     try{await dailyFrame.leave();}catch{}
     try{dailyFrame.destroy();}catch{}
