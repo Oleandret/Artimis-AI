@@ -1082,8 +1082,18 @@ async function pushPersonaToTavus(){
   if(s.llmBaseUrl)patches.push(p('/layers/llm/base_url',s.llmBaseUrl));
   try{
     const res=await fetch(`https://tavusapi.com/v2/personas/${s.personaId}`,{method:'PATCH',headers:{'Content-Type':'application/json','x-api-key':s.apiKey},body:JSON.stringify(patches)});
+    // 304 = Not Modified: persona er allerede oppdatert med samme innhold (regnes som suksess)
+    if(res.status===304){
+      showToast('✓ Persona er allerede oppdatert – ingen endringer nødvendig','success');
+      flash('save-msg','✓ Ingen endringer');
+      return;
+    }
     const rawText=await res.text(); let data={};
-    try{data=JSON.parse(rawText);}catch{throw new Error(`HTTP ${res.status} – ugyldig respons: ${rawText.slice(0,60)}`);}
+    try{data=JSON.parse(rawText);}catch(parseErr){
+      // Tom body eller ugyldig JSON – hvis statuskoden er 2xx behandles det som suksess
+      if(res.ok){showToast('✓ Persona oppdatert!','success');flash('save-msg','✓ Oppdatert på Tavus');return;}
+      throw new Error(`HTTP ${res.status} – ugyldig respons: ${rawText.slice(0,60)}`);
+    }
     if(!res.ok)throw new Error(`HTTP ${res.status}: ${data.message||data.error||JSON.stringify(data).slice(0,200)}`);
     showToast(`✓ Persona «${data.persona_name||s.personaId}» oppdatert!`,'success');
     flash('save-msg','✓ Oppdatert på Tavus');
