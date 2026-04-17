@@ -1216,106 +1216,43 @@ async function joinConversation(url) {
     dailyFrame = null;
   }
 
+  // ── Step 1: Raw iframe for video (reliable, no timeout issues) ──
+  const iframe = document.createElement('iframe');
+  iframe.src = url;
+  iframe.allow = 'camera *; microphone *; fullscreen *; display-capture *; speaker *; autoplay *';
+  iframe.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;border:none;';
+  container.appendChild(iframe);
+  clearTimeout(fallbackTimer);
+  document.getElementById('v-starting').style.display = 'none';
+  setStatus('active', 'Aktiv');
+  addLog('info', 'Video tilkoblet ✓', { url });
+  dbgLog('daily', 'Rå iframe for video ✓ – starter headless callObject for tool calls', {});
+
+  // ── Step 2: Headless callObject for tool calls + sendAppMessage ──
+  // Starts separately so iframe is not affected if Daily.js is unavailable
   if (typeof window.DailyIframe === 'undefined') {
-    // No Daily.js – raw iframe fallback (no tool calls)
-    const iframe = document.createElement('iframe');
-    iframe.src = url;
-    iframe.allow = 'camera *; microphone *; fullscreen *; display-capture *; speaker *; autoplay *';
-    iframe.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;border:none;';
-    container.appendChild(iframe);
-    clearTimeout(fallbackTimer);
-    document.getElementById('v-starting').style.display = 'none';
-    setStatus('active', 'Aktiv');
-    addLog('info', 'Video åpnet (iframe, ingen tool calls)', { url });
-    dbgLog('daily', 'Daily.js ikke tilgjengelig – bruker rå iframe', {}, true);
+    dbgLog('daily', 'Daily.js ikke tilgjengelig – ingen tool calls', {}, true);
     return;
   }
 
-  try {
-    // ── INSTANCE 1: videoFrame (createFrame) – video + AI pinning ──
-    const frame = window.DailyIframe.createFrame(container, {
-      iframeStyle: {
-        position: 'absolute', inset: '0',
-        width: '100%', height: '100%', border: 'none',
-      },
-      showLeaveButton: false,
-      showFullscreenButton: false,
-      activeSpeakerMode: true,
-    });
-    videoFrame = frame;
-
-    // Pin the AI replica as the main large view when it joins
-    frame.on('participant-joined', evt => {
-      if (!evt.participant.local) {
-        try {
-          frame.pinParticipant({ sessionId: evt.participant.session_id });
-          dbgLog('daily', '✓ AI-replika pinnet som hovedvisning', {
-            session_id: evt.participant.session_id,
-            name: evt.participant.user_name || 'replica',
-          });
-        } catch (e) {
-          dbgLog('daily', 'pinParticipant feilet: ' + e.message, {}, true);
-        }
-      }
-    });
-    frame.on('joined-meeting', () => {
-      addLog('info', 'Daily.js video tilkoblet ✓', {});
-      dbgLog('daily', 'videoFrame joined-meeting ✓', {});
-    });
-    frame.on('error', e => {
-      dbgLog('daily', 'videoFrame error', { error: e?.errorMsg || e }, true);
-    });
-
-    // Join video frame first
-    await Promise.race([
-      frame.join({ url }),
-      new Promise((_, r) => setTimeout(() => r(new Error('video-timeout')), 20000)),
-    ]);
-
-    clearTimeout(fallbackTimer);
-    document.getElementById('v-starting').style.display = 'none';
-    setStatus('active', 'Aktiv');
-    addLog('info', 'Video tilkoblet ✓', {});
-    dbgLog('daily', 'videoFrame joined ✓ – starter headless lytter for tool calls', {});
-
-    // ── INSTANCE 2: dailyFrame (callObject) – tool calls + sendAppMessage ──
-    // Headless: no audio/video tracks, joins same room to receive app-messages
-    startToolCallListener(url);
-
-  } catch (err) {
-    // Fallback: raw iframe if createFrame fails
-    clearTimeout(fallbackTimer);
-    if (videoFrame) { try { videoFrame.destroy(); } catch {} videoFrame = null; }
-    container.innerHTML = '';
-    const iframe = document.createElement('iframe');
-    iframe.src = url;
-    iframe.allow = 'camera *; microphone *; fullscreen *; display-capture *; speaker *; autoplay *';
-    iframe.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;border:none;';
-    container.appendChild(iframe);
-    document.getElementById('v-starting').style.display = 'none';
-    setStatus('active', 'Aktiv');
-    addLog('info', 'Video åpnet (iframe fallback)', {});
-    dbgLog('daily', 'createFrame feilet, bruker iframe + headless: ' + err?.message, {}, true);
-    // Still spin up headless listener for tool calls
-    startToolCallListener(url);
-  }
+  // Small delay so the iframe gets a head start connecting before we join headless
+  setTimeout(() => startToolCallListener(url), 2000);
 }
 
-// ── Headless callObject for tool calls + sendAppMessage ──
-// Always started alongside the video frame so webhooks work reliably.
+// ── Headless callObject – delivers app-message (tool calls) reliably ──
 async function startToolCallListener(url) {
   if (typeof window.DailyIframe === 'undefined') return;
   try {
     const call = window.DailyIframe.createCallObject({ audioSource: false, videoSource: false });
     dailyFrame = call;
     call.on('app-message', evt => handleAppMessage(evt.data));
-    call.on('joined-meeting', () => dbgLog('daily', 'Headless lytter joined ✓ (tool calls aktiv)', {}));
+    call.on('joined-meeting', () => {
+      addLog('info', 'Tool call lytter aktiv ✓', {});
+      dbgLog('daily', 'Headless callObject joined ✓ (webhooks aktiv)', {});
+    });
     call.on('error', e => dbgLog('daily', 'Headless lytter feil', { error: e?.errorMsg }, true));
-    await Promise.race([
-      call.join({ url }),
-      new Promise((_, r) => setTimeout(() => r(new Error('listener-timeout')), 20000)),
-    ]);
-    dbgLog('daily', 'Headless tool call lytter aktiv ✓', {});
+    await call.join({ url });
+    dbgLog('daily', 'Headless tool call lytter klar ✓', {});
   } catch (err) {
     dbgLog('daily', 'Headless lytter feilet: ' + err?.message, {}, true);
   }
