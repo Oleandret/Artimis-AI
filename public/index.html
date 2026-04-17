@@ -1151,36 +1151,154 @@ async function startConversation(){
 // ================================================================
 // JOIN
 // ================================================================
-async function joinConversation(url){
-  document.getElementById('v-label').textContent='Kobler til video...';
-  const fallbackTimer=setTimeout(()=>{document.getElementById('v-link').href=url;document.getElementById('v-link').textContent=url;document.getElementById('v-fallback').style.display='block';},5000);
-  const container=document.getElementById('daily-container'); container.innerHTML='';
-  const iframe=document.createElement('iframe');
-  iframe.src=url; iframe.allow='camera *; microphone *; fullscreen *; display-capture *; speaker *; autoplay *';
-  iframe.style.cssText='width:100%;height:100%;border:none;';
-  container.appendChild(iframe);
-  clearTimeout(fallbackTimer);
-  document.getElementById('v-starting').style.display='none';
-  setStatus('active','Aktiv');
-  addLog('info','Video åpnet ✓',{url}); dbgLog('daily','Video iframe åpnet ✓',{url:url?.slice(0,80)+'...'});
-  startDailyListener(url);
+// ── App-message handler (delt mellom frame og fallback callObject) ──
+function handleAppMessage(d) {
+  if (!d?.event_type) return;
+  if (d.event_type === 'conversation.tool_call') {
+    addLog('tool_call', 'Tool call', d);
+    dbgLog('tool', 'Tool call: ' + (d.properties?.tool_name || d.properties?.name || '?'), { raw_event: d });
+    handleToolCall(d);
+  } else if (d.event_type === 'conversation.utterance') {
+    const role = d.properties?.role || d.role;
+    const text = d.properties?.transcript || d.properties?.text || '';
+    if (role === 'user' && text) lastUserUtterance = text;
+    if (text) addTranscriptLine(role, text);
+    addLog('incoming', 'Tavus: ' + d.event_type, d.properties || {});
+  } else {
+    const p = d.properties || {};
+    const eventText = p.transcript || p.text || p.content || '';
+    if (['conversation.echo','conversation.transcription'].includes(d.event_type)) {
+      const role = p.role || 'user'; if (eventText) addTranscriptLine(role, eventText);
+      dbgLog('daily', `${d.event_type}: "${eventText.slice(0,80)}"`, p);
+    } else if (d.event_type === 'conversation.replica.stopped_speaking') {
+      if (eventText) addTranscriptLine('replica', eventText);
+      dbgLog('daily', 'replica: ' + eventText.slice(0,80), p);
+    } else if (d.event_type === 'conversation.user.stopped_speaking') {
+      if (eventText) { addTranscriptLine('user', eventText); lastUserUtterance = eventText; }
+      dbgLog('daily', 'bruker: ' + eventText.slice(0,80), p);
+    } else {
+      addLog('incoming', 'Tavus: ' + d.event_type, p);
+      dbgLog('daily', 'Daily event: ' + d.event_type, p);
+    }
+  }
 }
 
-async function startDailyListener(url){
-  if(typeof window.DailyIframe==='undefined'){addLog('info','Daily.js ikke lastet',{});dbgLog('daily','Daily.js ikke tilgjengelig',{},true);return;}
-  try{
-    if(dailyFrame){try{await dailyFrame.leave();}catch{}try{await dailyFrame.destroy();}catch{}dailyFrame=null;}
-    const call=window.DailyIframe.createCallObject({audioSource:false,videoSource:false}); dailyFrame=call;
-    call.on('joined-meeting',()=>{addLog('info','Daily.js lytter aktiv ✓',{});dbgLog('daily','joined-meeting ✓',{});});
-    call.on('app-message',evt=>{
-      const d=evt.data; if(!d?.event_type)return;
-      if(d.event_type==='conversation.tool_call'){addLog('tool_call','Tool call',d);dbgLog('tool','Tool call: '+(d.properties?.tool_name||'?'),{raw_event:d});handleToolCall(d);}
-      else if(d.event_type==='conversation.utterance'){const role=d.properties?.role||d.role;const text=d.properties?.transcript||d.properties?.text||'';if(role==='user'&&text)lastUserUtterance=text;if(text)addTranscriptLine(role,text);addLog('incoming','Tavus: '+d.event_type,d.properties||{});}
-      else{const p=d.properties||{};const eventText=p.transcript||p.text||p.content||'';if(['conversation.echo','conversation.transcription'].includes(d.event_type)){const role=p.role||'user';if(eventText)addTranscriptLine(role,eventText);dbgLog('daily',`${d.event_type}: "${eventText.slice(0,80)}"`,p);}else if(d.event_type==='conversation.replica.stopped_speaking'){if(eventText)addTranscriptLine('replica',eventText);dbgLog('daily','replica: '+eventText.slice(0,80),p);}else if(d.event_type==='conversation.user.stopped_speaking'){if(eventText){addTranscriptLine('user',eventText);lastUserUtterance=eventText;}dbgLog('daily','bruker: '+eventText.slice(0,80),p);}else{addLog('incoming','Tavus: '+d.event_type,p);dbgLog('daily','Daily event: '+d.event_type,p);}}
+async function joinConversation(url) {
+  document.getElementById('v-label').textContent = 'Kobler til video...';
+  const fallbackTimer = setTimeout(() => {
+    document.getElementById('v-link').href = url;
+    document.getElementById('v-link').textContent = url;
+    document.getElementById('v-fallback').style.display = 'block';
+  }, 8000);
+  const container = document.getElementById('daily-container');
+  container.innerHTML = '';
+
+  // Clean up any previous frame
+  if (dailyFrame) {
+    try { await dailyFrame.leave(); } catch {}
+    try { await dailyFrame.destroy(); } catch {}
+    dailyFrame = null;
+  }
+
+  if (typeof window.DailyIframe === 'undefined') {
+    // No Daily.js – raw iframe fallback (no tool calls)
+    const iframe = document.createElement('iframe');
+    iframe.src = url;
+    iframe.allow = 'camera *; microphone *; fullscreen *; display-capture *; speaker *; autoplay *';
+    iframe.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;border:none;';
+    container.appendChild(iframe);
+    clearTimeout(fallbackTimer);
+    document.getElementById('v-starting').style.display = 'none';
+    setStatus('active', 'Aktiv');
+    addLog('info', 'Video åpnet (iframe, ingen tool calls)', { url });
+    dbgLog('daily', 'Daily.js ikke tilgjengelig – bruker rå iframe', {}, true);
+    return;
+  }
+
+  try {
+    // ── createFrame: Daily prebuilt UI med layout-kontroll ──
+    const frame = window.DailyIframe.createFrame(container, {
+      iframeStyle: {
+        position: 'absolute', inset: '0',
+        width: '100%', height: '100%', border: 'none',
+      },
+      showLeaveButton: false,
+      showFullscreenButton: false,
+      // activeSpeakerMode pinner aktiv taler (AI) i stor visning
+      activeSpeakerMode: true,
     });
-    call.on('error',e=>{addLog('info','Daily feil',{});dbgLog('daily','Daily.js error',{error:e?.errorMsg||e},true);});
-    await Promise.race([call.join({url}),new Promise((_,r)=>setTimeout(()=>r(),15000))]);
-  }catch(err){addLog('info','Daily.js lytter ikke',{});dbgLog('daily','startDailyListener feilet: '+err?.message,{error:err?.message},true);}
+    dailyFrame = frame;
+
+    // ── Når AI-replikaen joiner: pin den med én gang ──
+    frame.on('participant-joined', evt => {
+      if (!evt.participant.local) {
+        try {
+          // pinParticipant setter AI-en som fastlåst storvisning
+          frame.pinParticipant({ sessionId: evt.participant.session_id });
+          dbgLog('daily', '✓ AI-replika pinnet som hovedvisning', {
+            session_id: evt.participant.session_id,
+            name: evt.participant.user_name || 'replica',
+          });
+        } catch (e) {
+          dbgLog('daily', 'pinParticipant feilet: ' + e.message, {}, true);
+        }
+      }
+    });
+
+    // ── Lytt på app-messages (tool calls, transkripsjon etc.) ──
+    frame.on('app-message', evt => handleAppMessage(evt.data));
+    frame.on('joined-meeting', () => {
+      addLog('info', 'Daily.js tilkoblet ✓', {});
+      dbgLog('daily', 'joined-meeting ✓ – venter på AI-replika', {});
+    });
+    frame.on('error', e => {
+      addLog('info', 'Daily feil', {});
+      dbgLog('daily', 'Daily.js error', { error: e?.errorMsg || e }, true);
+    });
+
+    await Promise.race([
+      frame.join({ url }),
+      new Promise((_, r) => setTimeout(() => r(new Error('timeout')), 20000)),
+    ]);
+
+    clearTimeout(fallbackTimer);
+    document.getElementById('v-starting').style.display = 'none';
+    setStatus('active', 'Aktiv');
+    addLog('info', 'Video tilkoblet ✓', {});
+    dbgLog('daily', 'Daily.js frame joined ✓ – AI vil pinnes automatisk ved inntreden', {});
+
+  } catch (err) {
+    // Fallback: rå iframe dersom createFrame feiler
+    clearTimeout(fallbackTimer);
+    if (dailyFrame) { try { dailyFrame.destroy(); } catch {} dailyFrame = null; }
+    container.innerHTML = '';
+    const iframe = document.createElement('iframe');
+    iframe.src = url;
+    iframe.allow = 'camera *; microphone *; fullscreen *; display-capture *; speaker *; autoplay *';
+    iframe.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;border:none;';
+    container.appendChild(iframe);
+    document.getElementById('v-starting').style.display = 'none';
+    setStatus('active', 'Aktiv');
+    addLog('info', 'Video åpnet (iframe fallback)', {});
+    dbgLog('daily', 'createFrame feilet, bruker iframe: ' + err?.message, {}, true);
+    // Separat headless lytter for tool calls
+    startFallbackListener(url);
+  }
+}
+
+// Headless lytter – brukes kun hvis createFrame feiler
+async function startFallbackListener(url) {
+  if (typeof window.DailyIframe === 'undefined') return;
+  try {
+    const call = window.DailyIframe.createCallObject({ audioSource: false, videoSource: false });
+    dailyFrame = call;
+    call.on('app-message', evt => handleAppMessage(evt.data));
+    call.on('error', e => dbgLog('daily', 'Fallback lytter feil', { error: e?.errorMsg }, true));
+    await Promise.race([call.join({ url }), new Promise((_, r) => setTimeout(() => r(), 15000))]);
+    dbgLog('daily', 'Fallback headless lytter aktiv ✓', {});
+  } catch (err) {
+    dbgLog('daily', 'Fallback lytter feilet: ' + err?.message, {}, true);
+  }
 }
 
 // ================================================================
@@ -1190,7 +1308,11 @@ let vcoTimerInterval=null,vcoSeconds=0;
 function startVcoTimer(){vcoSeconds=0;clearInterval(vcoTimerInterval);vcoTimerInterval=setInterval(()=>{vcoSeconds++;const m=String(Math.floor(vcoSeconds/60)).padStart(2,'0');const s=String(vcoSeconds%60).padStart(2,'0');const el=document.getElementById('vco-timer');if(el)el.textContent=m+':'+s;},1000);}
 async function stopConversation(){
   clearInterval(vcoTimerInterval);
-  if(dailyFrame){try{await dailyFrame.leave();}catch{}}
+  if(dailyFrame){
+    try{await dailyFrame.leave();}catch{}
+    try{dailyFrame.destroy();}catch{}
+    dailyFrame=null;
+  }
   document.getElementById('daily-container').innerHTML='';
   document.getElementById('v-idle').style.display='flex';
   document.getElementById('vco').classList.remove('visible');
