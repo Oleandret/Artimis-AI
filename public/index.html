@@ -1210,16 +1210,48 @@ async function joinConversation(url){
 }
 
 async function startDailyListener(url){
-  if(typeof window.DailyIframe==='undefined'){addLog('info','Daily.js ikke lastet',{});dbgLog('daily','Daily.js ikke tilgjengelig',{},true);return;}
+  if(typeof window.DailyIframe==='undefined'){addLog('info','Daily.js ikke lastet',{});dbgLog('daily','Daily.js ikke tilgjengelig – INGEN TOOL CALLS',{},true);return;}
   try{
     if(dailyFrame){try{await dailyFrame.leave();}catch{}try{await dailyFrame.destroy();}catch{}dailyFrame=null;}
     if(videoFrame){try{await videoFrame.leave();}catch{}try{videoFrame.destroy();}catch{}videoFrame=null;}
-    const call=window.DailyIframe.createCallObject({audioSource:false,videoSource:false}); dailyFrame=call;
-    call.on('joined-meeting',()=>{addLog('info','Daily.js lytter aktiv ✓',{});dbgLog('daily','joined-meeting ✓',{});});
-    call.on('app-message',evt=>{handleAppMessage(evt.data);});
-    call.on('error',e=>{addLog('info','Daily feil',{});dbgLog('daily','Daily.js error',{error:e?.errorMsg||e},true);});
-    await Promise.race([call.join({url}),new Promise((_,r)=>setTimeout(()=>r(),15000))]);
-  }catch(err){addLog('info','Daily.js lytter ikke',{});dbgLog('daily','startDailyListener feilet: '+err?.message,{error:err?.message},true);}
+    const call=window.DailyIframe.createCallObject({audioSource:false,videoSource:false});
+    dailyFrame=call;
+
+    call.on('joined-meeting', evt => {
+      addLog('info','🟢 Daily.js lytter aktiv – tool calls klar',{});
+      dbgLog('daily','✅ joined-meeting ✓ – callObject er i rommet, klar for tool calls',{localSessionId: evt?.participants?.local?.session_id||'ukjent'});
+    });
+
+    // Log ALL incoming app-messages (raw) so we can see exactly what Tavus sends
+    call.on('app-message', evt => {
+      dbgLog('daily','📨 RAW app-message mottatt',{data: evt?.data, fromId: evt?.fromId});
+      handleAppMessage(evt?.data);
+    });
+
+    call.on('participant-joined', evt => {
+      dbgLog('daily','👤 Deltaker i rommet: '+(evt?.participant?.user_name||evt?.participant?.session_id||'ukjent'),{local:evt?.participant?.local});
+    });
+
+    call.on('error', e => {
+      addLog('info','🔴 Daily feil: '+(e?.errorMsg||JSON.stringify(e)),{});
+      dbgLog('daily','❌ Daily.js error',{error: e?.errorMsg||e, type: e?.type},true);
+    });
+
+    call.on('left-meeting', () => {
+      dbgLog('daily','ℹ️ callObject forlot rommet',{});
+    });
+
+    dbgLog('daily','⏳ Prøver call.join() med URL...',{url: url?.slice(0,80)});
+    await Promise.race([
+      call.join({url}),
+      new Promise((_,r)=>setTimeout(()=>r(new Error('join-timeout-15s')),15000))
+    ]);
+    dbgLog('daily','✅ call.join() fullført',{});
+  }catch(err){
+    addLog('info','🔴 Daily.js lytter IKKE aktiv – '+err?.message,{});
+    dbgLog('daily','❌ startDailyListener feilet: '+err?.message,{error:err?.message},true);
+    // Keep dailyFrame set so sendAppMessage attempts are logged, not silently dropped
+  }
 }
 
 // ================================================================
@@ -1306,7 +1338,12 @@ async function handleToolCall(event){
   if(!target) target={name:toolName,url:targetUrl,description:'',auth:''};
   const headers={'Content-Type':'application/json'}; const auth=target?.auth||s.n8nAuth; if(auth)headers['Authorization']=auth;
   const question=args.query||args.question||args.action||args.task||args.input||args.text||args.message||(Object.keys(args).length?JSON.stringify(args):null)||lastUserUtterance||'';
-  if(!question){respondToTavus(convId,'Beklager, jeg fikk ikke med meg spørsmålet ditt. Kan du gjenta?',toolCallId);return;}
+  dbgLog('webhook',`📋 Args parsed: keys=[${Object.keys(args).join(',')}] question="${String(question).slice(0,80)}"`,{args,lastUserUtterance:lastUserUtterance?.slice(0,60)});
+  if(!question){
+    dbgLog('webhook','⚠️ question er tom – sender fallback-svar til Tavus',{args,lastUserUtterance},true);
+    respondToTavus(convId,'Beklager, jeg fikk ikke med meg spørsmålet ditt. Kan du gjenta?',toolCallId);
+    return;
+  }
   const payload={question,query:question,command:question,args,tool_name:toolName,language:'norwegian'};
   addLog('n8n_request',`→ ${target.name}: ${question}`,payload);
   dbgLog('webhook',`→ ${target.name}: ${question.slice(0,80)}`,{tool_name:toolName,url:targetUrl,tool_call_id:toolCallId});
@@ -1316,7 +1353,9 @@ async function handleToolCall(event){
 }
 
 function respondToTavus(convId,text,toolCallId){
-  if(!dailyFrame){dbgLog('tavus','respondToTavus: dailyFrame er null',{text:text?.slice(0,80)},true);return;}
+  const state=dailyFrame?.meetingState?.();
+  dbgLog('tavus',`respondToTavus kallt – dailyFrame=${dailyFrame?'✓':'null'} state=${state||'?'}`,{text:text?.slice(0,60),toolCallId,convId});
+  if(!dailyFrame){dbgLog('tavus','❌ respondToTavus: dailyFrame er null – kan ikke sende svar!',{text:text?.slice(0,80)},true);return;}
   try{
     if(toolCallId){dailyFrame.sendAppMessage({message_type:'conversation',event_type:'conversation.tool_result',conversation_id:convId,properties:{tool_call_id:toolCallId,output:text}},'*');addLog('outgoing','✓ Tool result sendt',{tool_call_id:toolCallId,text});dbgLog('tavus','→ conversation.tool_result sendt',{tool_call_id:toolCallId,output:text?.slice(0,120)});}
     else{dailyFrame.sendAppMessage({message_type:'conversation',event_type:'conversation.respond',conversation_id:convId,properties:{text}},'*');addLog('outgoing','Svar sendt',{text});dbgLog('tavus','→ conversation.respond (ingen tool_call_id)',{text:text?.slice(0,120)},true);}
