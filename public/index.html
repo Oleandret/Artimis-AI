@@ -1194,68 +1194,32 @@ function handleAppMessage(d) {
   }
 }
 
-async function joinConversation(url) {
-  document.getElementById('v-label').textContent = 'Kobler til video...';
-  const fallbackTimer = setTimeout(() => {
-    document.getElementById('v-link').href = url;
-    document.getElementById('v-link').textContent = url;
-    document.getElementById('v-fallback').style.display = 'block';
-  }, 8000);
-  const container = document.getElementById('daily-container');
-  container.innerHTML = '';
-
-  // Clean up any previous instances
-  if (videoFrame) {
-    try { await videoFrame.leave(); } catch {}
-    try { videoFrame.destroy(); } catch {}
-    videoFrame = null;
-  }
-  if (dailyFrame) {
-    try { await dailyFrame.leave(); } catch {}
-    try { dailyFrame.destroy(); } catch {}
-    dailyFrame = null;
-  }
-
-  // ── Step 1: Raw iframe for video (reliable, no timeout issues) ──
-  const iframe = document.createElement('iframe');
-  iframe.src = url;
-  iframe.allow = 'camera *; microphone *; fullscreen *; display-capture *; speaker *; autoplay *';
-  iframe.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;border:none;';
+async function joinConversation(url){
+  document.getElementById('v-label').textContent='Kobler til video...';
+  const fallbackTimer=setTimeout(()=>{document.getElementById('v-link').href=url;document.getElementById('v-link').textContent=url;document.getElementById('v-fallback').style.display='block';},5000);
+  const container=document.getElementById('daily-container'); container.innerHTML='';
+  const iframe=document.createElement('iframe');
+  iframe.src=url; iframe.allow='camera *; microphone *; fullscreen *; display-capture *; speaker *; autoplay *';
+  iframe.style.cssText='position:absolute;inset:0;width:100%;height:100%;border:none;';
   container.appendChild(iframe);
   clearTimeout(fallbackTimer);
-  document.getElementById('v-starting').style.display = 'none';
-  setStatus('active', 'Aktiv');
-  addLog('info', 'Video tilkoblet ✓', { url });
-  dbgLog('daily', 'Rå iframe for video ✓ – starter headless callObject for tool calls', {});
-
-  // ── Step 2: Headless callObject for tool calls + sendAppMessage ──
-  // Starts separately so iframe is not affected if Daily.js is unavailable
-  if (typeof window.DailyIframe === 'undefined') {
-    dbgLog('daily', 'Daily.js ikke tilgjengelig – ingen tool calls', {}, true);
-    return;
-  }
-
-  // Small delay so the iframe gets a head start connecting before we join headless
-  setTimeout(() => startToolCallListener(url), 2000);
+  document.getElementById('v-starting').style.display='none';
+  setStatus('active','Aktiv');
+  addLog('info','Video åpnet ✓',{url}); dbgLog('daily','Video iframe åpnet ✓',{url:url?.slice(0,80)+'...'});
+  startDailyListener(url);
 }
 
-// ── Headless callObject – delivers app-message (tool calls) reliably ──
-async function startToolCallListener(url) {
-  if (typeof window.DailyIframe === 'undefined') return;
-  try {
-    const call = window.DailyIframe.createCallObject({ audioSource: false, videoSource: false });
-    dailyFrame = call;
-    call.on('app-message', evt => handleAppMessage(evt.data));
-    call.on('joined-meeting', () => {
-      addLog('info', 'Tool call lytter aktiv ✓', {});
-      dbgLog('daily', 'Headless callObject joined ✓ (webhooks aktiv)', {});
-    });
-    call.on('error', e => dbgLog('daily', 'Headless lytter feil', { error: e?.errorMsg }, true));
-    await call.join({ url });
-    dbgLog('daily', 'Headless tool call lytter klar ✓', {});
-  } catch (err) {
-    dbgLog('daily', 'Headless lytter feilet: ' + err?.message, {}, true);
-  }
+async function startDailyListener(url){
+  if(typeof window.DailyIframe==='undefined'){addLog('info','Daily.js ikke lastet',{});dbgLog('daily','Daily.js ikke tilgjengelig',{},true);return;}
+  try{
+    if(dailyFrame){try{await dailyFrame.leave();}catch{}try{await dailyFrame.destroy();}catch{}dailyFrame=null;}
+    if(videoFrame){try{await videoFrame.leave();}catch{}try{videoFrame.destroy();}catch{}videoFrame=null;}
+    const call=window.DailyIframe.createCallObject({audioSource:false,videoSource:false}); dailyFrame=call;
+    call.on('joined-meeting',()=>{addLog('info','Daily.js lytter aktiv ✓',{});dbgLog('daily','joined-meeting ✓',{});});
+    call.on('app-message',evt=>{handleAppMessage(evt.data);});
+    call.on('error',e=>{addLog('info','Daily feil',{});dbgLog('daily','Daily.js error',{error:e?.errorMsg||e},true);});
+    await Promise.race([call.join({url}),new Promise((_,r)=>setTimeout(()=>r(),15000))]);
+  }catch(err){addLog('info','Daily.js lytter ikke',{});dbgLog('daily','startDailyListener feilet: '+err?.message,{error:err?.message},true);}
 }
 
 // ================================================================
@@ -1265,16 +1229,8 @@ let vcoTimerInterval=null,vcoSeconds=0;
 function startVcoTimer(){vcoSeconds=0;clearInterval(vcoTimerInterval);vcoTimerInterval=setInterval(()=>{vcoSeconds++;const m=String(Math.floor(vcoSeconds/60)).padStart(2,'0');const s=String(vcoSeconds%60).padStart(2,'0');const el=document.getElementById('vco-timer');if(el)el.textContent=m+':'+s;},1000);}
 async function stopConversation(){
   clearInterval(vcoTimerInterval);
-  if(videoFrame){
-    try{await videoFrame.leave();}catch{}
-    try{videoFrame.destroy();}catch{}
-    videoFrame=null;
-  }
-  if(dailyFrame){
-    try{await dailyFrame.leave();}catch{}
-    try{dailyFrame.destroy();}catch{}
-    dailyFrame=null;
-  }
+  if(dailyFrame){try{await dailyFrame.leave();}catch{}try{dailyFrame.destroy();}catch{}dailyFrame=null;}
+  if(videoFrame){try{await videoFrame.leave();}catch{}try{videoFrame.destroy();}catch{}videoFrame=null;}
   document.getElementById('daily-container').innerHTML='';
   document.getElementById('v-idle').style.display='flex';
   document.getElementById('vco').classList.remove('visible');
