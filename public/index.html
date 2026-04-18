@@ -202,6 +202,19 @@ code{color:var(--accent);font-family:monospace}
 .toast.show{opacity:1}
 .toast.error{border-color:var(--red);color:var(--red)}
 .toast.success{border-color:var(--green);color:var(--green)}
+/* ── Hjelp-panel ── */
+.help-block{font-size:12px;color:var(--text);line-height:1.7;display:flex;flex-direction:column;gap:6px}
+.help-block p{margin:0}
+.help-block a.help-link{color:var(--accent);text-decoration:none}
+.help-block a.help-link:hover{text-decoration:underline}
+.help-block code{background:var(--card);border:1px solid var(--border);border-radius:4px;padding:1px 5px;font-size:10px;font-family:monospace;color:var(--text)}
+.help-code{background:var(--card);border:1px solid var(--border);border-radius:6px;padding:8px 10px;font-family:monospace;font-size:10px;color:var(--text);word-break:break-all;white-space:pre-wrap}
+.help-ol{margin:2px 0 0 16px;padding:0;display:flex;flex-direction:column;gap:3px}
+.help-chips{display:flex;flex-wrap:wrap;gap:5px}
+.help-chips span{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:2px 9px;font-size:11px;color:var(--muted)}
+.help-table{width:100%;border-collapse:collapse;font-size:11px;margin-top:4px}
+.help-table td{padding:4px 8px;border:1px solid var(--border);vertical-align:top}
+.help-table tr:first-child td{background:var(--card)}
 </style>
 </head>
 <body>
@@ -351,6 +364,7 @@ code{color:var(--accent);font-family:monospace}
         <button class="stab-btn" onclick="switchStab('stt',this)">🎤 STT</button>
         <button class="stab-btn" onclick="switchStab('flyt',this)">💬 Flyt</button>
         <button class="stab-btn" onclick="switchStab('integrasjoner',this)">🔗 Integr.</button>
+        <button class="stab-btn" onclick="switchStab('hjelp',this)">❓ Hjelp</button>
       </div>
       <div class="stab-panels">
 
@@ -650,6 +664,111 @@ code{color:var(--accent);font-family:monospace}
             <div id="openclaw-test-result" style="margin-top:6px;font-size:11px;display:none"></div>
           </div>
         </div><!-- /stab-integrasjoner -->
+
+        <!-- HJELP -->
+        <div class="stab-panel" id="stab-hjelp">
+
+          <div class="section">
+            <div class="section-title">🚀 Kom i gang</div>
+            <div class="help-block">
+              <p>Artimis AI lar deg snakke med en AI-videoavatar i nettleseren. Avataren ser deg og svarer deg med tale i sanntid.</p>
+              <p><strong>Du trenger:</strong></p>
+              <ol class="help-ol">
+                <li>En Tavus API-nøkkel og Persona ID (se under)</li>
+                <li>Mikrofon og høyttaler/hodetelefoner</li>
+                <li>Moderne nettleser (Chrome anbefalt)</li>
+              </ol>
+            </div>
+          </div>
+
+          <div class="section">
+            <div class="section-title">🔑 Tavus-oppsett</div>
+            <div class="help-block">
+              <p><strong>API-nøkkel:</strong> Logg inn på <a href="https://platform.tavus.io" target="_blank" class="help-link">platform.tavus.io</a> → API Keys → generer ny nøkkel. Lim inn under <em>Tavus → API-tilkobling</em>.</p>
+              <p><strong>Persona ID:</strong> Gå til Personas i Tavus-dashboardet → velg eller opprett en persona → kopier ID-en (ser ut som <code>pfe674c80016</code>).</p>
+              <p><strong>Replica ID:</strong> Valgfritt. Brukes hvis du vil bruke et spesifikt ansikt/stemme som ikke er standard for personaen.</p>
+              <p>Etter å ha endret Persona-navn, systemmelding eller verktøy — trykk <strong>🔄 Oppdater persona</strong> for at endringene skal gjelde.</p>
+            </div>
+          </div>
+
+          <div class="section">
+            <div class="section-title">🗣 Avslutte samtalen med stemme</div>
+            <div class="help-block">
+              <p>Med <em>«Jeg kan avslutte med stemme»</em> aktivert kan du si en av disse frasene for å avslutte:</p>
+              <div class="help-chips">
+                <span>ha det</span><span>ha det bra</span><span>adjø</span><span>farvel</span>
+                <span>bye</span><span>goodbye</span><span>avslutt samtalen</span>
+                <span>stopp samtalen</span><span>vi er ferdige</span><span>jeg er ferdig</span>
+                <span>takk for praten</span><span>det var alt</span>
+              </div>
+              <p style="margin-top:8px">Samtalen avsluttes automatisk 2 sekunder etter at frasen er oppdaget.</p>
+              <p><strong>NB:</strong> Innstillingen <em>«AI kan avslutte av seg selv»</em> bør holdes <strong>av</strong> — da bestemmer AI-en selv når samtalen er ferdig, noe som kan føre til at den avslutter etter første spørsmål.</p>
+            </div>
+          </div>
+
+          <div class="section">
+            <div class="section-title">🔊 Stemme (TTS)</div>
+            <div class="help-block">
+              <p>Under <em>🔊 TTS</em> kan du velge stemme for avataren:</p>
+              <p><strong>ElevenLabs</strong> (anbefalt): Trenger ElevenLabs API-nøkkel fra <a href="https://elevenlabs.io" target="_blank" class="help-link">elevenlabs.io</a> og en Voice ID. Finn Voice ID-er under «Voices» i ElevenLabs-dashboardet.</p>
+              <p><strong>Tavus Default</strong>: Innebygd stemme, ingen ekstra oppsett.</p>
+              <p><strong>Cartesia</strong>: Alternativ TTS-motor med lav latens.</p>
+              <p>Stemmeendringer krever <strong>🔄 Oppdater persona</strong> + ny samtale.</p>
+            </div>
+          </div>
+
+          <div class="section">
+            <div class="section-title">🤖 Webhook-agenter</div>
+            <div class="help-block">
+              <p>Webhooks lar avataren kalle eksterne tjenester som n8n, Homey, egne API-er osv. Hvert webhook blir et <strong>verktøy</strong> avataren kan bruke under samtalen.</p>
+              <p><strong>Oppsett:</strong> Integr. → Webhook-agenter → Legg til webhook. Fyll inn navn, URL og beskrivelse.</p>
+              <p><strong>Forventet svar fra webhook:</strong></p>
+              <div class="help-code">{"speakable_response": "Svaret på norsk som avataren skal si"}</div>
+              <p>Verktøyet aktiveres ved å trykke <strong>🔄 Oppdater persona</strong>.</p>
+            </div>
+          </div>
+
+          <div class="section">
+            <div class="section-title">🐾 OpenClaw-integrasjon</div>
+            <div class="help-block">
+              <p>OpenClaw lar deg erstatte Tavus sin innebygde AI med din egen OpenClaw-agent. Avataren blir da bare ansikt og stemme — OpenClaw er hjernen.</p>
+              <p><strong>Steg 1 – Aktiver API i OpenClaw-konfigen</strong> (<code>~/.openclaw/config.json</code>):</p>
+              <div class="help-code">{"gateway": {"http": {"endpoints": {"chatCompletions": {"enabled": true}}}}}</div>
+              <p><strong>Steg 2 – Restart gateway:</strong></p>
+              <div class="help-code">openclaw gateway</div>
+              <p><strong>Steg 3 – Fyll inn i Artimis AI</strong> (Integr. → OpenClaw):</p>
+              <table class="help-table">
+                <tr><td>Gateway URL</td><td><code>https://din-server:18789/v1</code></td></tr>
+                <tr><td>Agent-ID / modell</td><td><code>openclaw/default</code></td></tr>
+                <tr><td>API-nøkkel</td><td>Bearer-token fra OpenClaw</td></tr>
+              </table>
+              <p><strong>Steg 4</strong> – Trykk <em>🔌 Test tilkobling</em>. Ved grønt resultat er du klar.</p>
+              <p><strong>Steg 5</strong> – Lagre og start en ny samtale. Aktiver <em>«Bruk OpenClaw som LLM»</em>-toggle.</p>
+              <p style="color:var(--muted);font-size:11px">Tips: Gi OpenClaw-agenten din en system-prompt som sier at svar leses høyt — unngå markdown og lister.</p>
+            </div>
+          </div>
+
+          <div class="section">
+            <div class="section-title">⏱ Inaktivitetstimer</div>
+            <div class="help-block">
+              <p>Under <em>Tavus → Avslutt samtale → Auto-avslutt etter inaktivitet</em> kan du sette antall sekunder uten tale før samtalen avsluttes automatisk.</p>
+              <p>Sett til <strong>0</strong> for å deaktivere. Anbefalt verdi: 60–120 sekunder.</p>
+            </div>
+          </div>
+
+          <div class="section">
+            <div class="section-title">🐛 Feilsøking</div>
+            <div class="help-block">
+              <p><strong>Samtalen henger ved «Kobler til»:</strong> Sjekk at Replica ID er korrekt, eller la feltet stå tomt.</p>
+              <p><strong>Ingen lyd fra avatar:</strong> Sjekk at nettleseren har tillatt mikrofon og lyd. Prøv å oppdatere siden.</p>
+              <p><strong>Transkripsjon mangler:</strong> Åpne 📡 Debug-panelet og se etter <code>conversation.utterance.streaming</code>-hendelser. Sjekk at Daily-tilkoblingen viser «🟢 Daily events aktiv».</p>
+              <p><strong>Webhook svarer ikke:</strong> Sjekk at webhook-URL er tilgjengelig og returnerer riktig JSON-format. Bruk Debug-panelet for å se nøyaktige feilmeldinger.</p>
+              <p><strong>OpenClaw-test feiler:</strong> Verifiser at <code>chatCompletions.enabled: true</code> er satt og at gatewayen er restartet.</p>
+              <p>Debug-panelet (<strong>📡 Debug</strong>-fanen) viser alle hendelser i sanntid og er nyttig for å diagnostisere problemer.</p>
+            </div>
+          </div>
+
+        </div><!-- /stab-hjelp -->
 
       </div><!-- /stab-panels -->
 
