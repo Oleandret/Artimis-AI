@@ -383,6 +383,21 @@ code{color:var(--accent);font-family:monospace}
             <div class="field"><label>Callback URL</label><input type="url" id="s-callback-url" placeholder="https://..."></div>
           </div>
           <div class="section">
+            <div class="section-title">🔚 Avslutt samtale</div>
+            <div class="toggle-row">
+              <label>La AI avslutte ved «ha det» o.l.</label>
+              <label class="toggle"><input type="checkbox" id="s-enable-end-tool" checked><span class="toggle-slider"></span></label>
+            </div>
+            <div class="field" id="s-inactivity-row">
+              <label>Auto-avslutt etter inaktivitet</label>
+              <div style="display:flex;align-items:center;gap:8px">
+                <input type="number" id="s-inactivity-timeout" placeholder="60" min="10" max="600" style="width:80px">
+                <span style="color:var(--muted);font-size:12px">sekunder (0 = av)</span>
+              </div>
+              <div style="font-size:11px;color:var(--muted);margin-top:4px">Samtalen avsluttes automatisk hvis ingen snakker på X sekunder.</div>
+            </div>
+          </div>
+          <div class="section">
             <div class="section-title">🎥 Opptak</div>
             <div class="toggle-row"><label>Aktiver opptak</label><label class="toggle"><input type="checkbox" id="s-enable-recording"><span class="toggle-slider"></span></label></div>
             <div class="toggle-row"><label>Aktiver transkripsjon</label><label class="toggle"><input type="checkbox" id="s-enable-transcription"><span class="toggle-slider"></span></label></div>
@@ -686,6 +701,8 @@ function getSettings() {
     absentTimeout:  parseInt(localStorage.getItem('absent_timeout')  || '0') || null,
     leftTimeout:    parseInt(localStorage.getItem('left_timeout')    || '0') || null,
     callbackUrl:    localStorage.getItem('callback_url')        || '',
+    enableEndTool:  localStorage.getItem('enable_end_tool') !== 'false', // default true
+    inactivityTimeout: parseInt(localStorage.getItem('inactivity_timeout') || '60') || 60,
     enableRecording:    localStorage.getItem('enable_recording')     === 'true',
     enableTranscription: localStorage.getItem('enable_transcription') === 'true',
     applyGreenscreen:   localStorage.getItem('apply_greenscreen')    === 'true',
@@ -792,7 +809,8 @@ function readForm() {
     apiKey:v('s-api-key'), personaId:v('s-persona-id'), replicaId:v('s-replica-id'),
     personaName:v('s-persona-name'), pipelineMode:v('s-pipeline-mode'), contextWindow:v('s-context-window'),
     maxDuration:ni('s-max-duration'), absentTimeout:ni('s-absent-timeout'), leftTimeout:ni('s-left-timeout'),
-    callbackUrl:v('s-callback-url'), enableRecording:cb('s-enable-recording'),
+    callbackUrl:v('s-callback-url'), enableEndTool:cb('s-enable-end-tool'), inactivityTimeout:ni('s-inactivity-timeout'),
+    enableRecording:cb('s-enable-recording'),
     enableTranscription:cb('s-enable-transcription'), applyGreenscreen:cb('s-apply-greenscreen'),
     s3Bucket:v('s-s3-bucket'), s3Region:v('s-s3-region'),
     llmModel, llmBaseUrl:v('s-llm-base-url'), llmCustomModel:v('s-llm-custom-model'), llmApiKey:v('s-llm-api-key'),
@@ -824,7 +842,8 @@ function saveSettings() {
     tavus_api_key:s.apiKey, tavus_persona_id:s.personaId, tavus_replica_id:s.replicaId,
     persona_name:s.personaName, pipeline_mode:s.pipelineMode, context_window:s.contextWindow,
     max_duration:s.maxDuration||'', absent_timeout:s.absentTimeout||'', left_timeout:s.leftTimeout||'',
-    callback_url:s.callbackUrl, enable_recording:s.enableRecording, enable_transcription:s.enableTranscription,
+    callback_url:s.callbackUrl, enable_end_tool:s.enableEndTool, inactivity_timeout:s.inactivityTimeout||60,
+    enable_recording:s.enableRecording, enable_transcription:s.enableTranscription,
     apply_greenscreen:s.applyGreenscreen, s3_bucket:s.s3Bucket, s3_region:s.s3Region,
     llm_model:s.llmModel, llm_base_url:s.llmBaseUrl, llm_custom_model:s.llmCustomModel, llm_api_key:s.llmApiKey,
     speculative:s.speculative, temperature:s.temperature, max_tokens:s.maxTokens||'',
@@ -857,6 +876,7 @@ function loadSettingsIntoForm() {
   sv('s-persona-name',s.personaName); sv('s-pipeline-mode',s.pipelineMode); sv('s-context-window',s.contextWindow);
   sv('s-max-duration',s.maxDuration||''); sv('s-absent-timeout',s.absentTimeout||''); sv('s-left-timeout',s.leftTimeout||'');
   sv('s-callback-url',s.callbackUrl); sv('s-callback-url-2',s.callbackUrl);
+  scb('s-enable-end-tool',s.enableEndTool); sv('s-inactivity-timeout',s.inactivityTimeout||60);
   scb('s-enable-recording',s.enableRecording); scb('s-enable-transcription',s.enableTranscription);
   scb('s-apply-greenscreen',s.applyGreenscreen); sv('s-s3-bucket',s.s3Bucket); sv('s-s3-region',s.s3Region);
   const knownModels=['tavus-gpt-oss','tavus-claude-haiku-4.5','tavus-gemini-2.5-flash','tavus-gpt-5.2','tavus-gemini-3-flash'];
@@ -1078,8 +1098,8 @@ async function pushPersonaToTavus(){
   const homeyToolAlreadyDefined=toolDefs.some(t=>t.function?.name==='homey_tool');
   if(homeyEnabled&&!homeyToolAlreadyDefined) toolDefs.push(makeHomeyToolDef());
   const idx=toolDefs.findIndex(t=>t.function?.name==='homey_tool'); if(idx>=0) toolDefs[idx]=makeHomeyToolDef();
-  // end_conversation er alltid med som standardverktøy
-  if(!toolDefs.some(t=>t.function?.name==='end_conversation')) toolDefs.push(makeEndConversationToolDef());
+  // end_conversation – kun hvis aktivert i innstillinger
+  if(s.enableEndTool&&!toolDefs.some(t=>t.function?.name==='end_conversation')) toolDefs.push(makeEndConversationToolDef());
   const p=(path,value)=>({op:'add',path,value});
   const patches=[p('/system_prompt',s.systemPrompt),p('/greeting',s.greeting),p('/pipeline_mode',s.pipelineMode),p('/layers/llm/model',effectiveModel),p('/layers/llm/tools',toolDefs)];
   if(s.personaName)patches.push(p('/persona_name',s.personaName));
@@ -1276,11 +1296,14 @@ function clearVideoLoading(){
 function resetInactivityTimer(){
   if(!conversationId) return; // bare aktiv under samtale
   clearTimeout(inactivityTimer);
+  const s=getSettings();
+  const timeout=(s.inactivityTimeout||0)*1000;
+  if(timeout<=0) return; // deaktivert (0 sek)
   inactivityTimer=setTimeout(()=>{
-    addLog('info','⏱ 1 minutt uten aktivitet – avslutter samtalen',{});
+    addLog('info',`⏱ ${s.inactivityTimeout}s uten aktivitet – avslutter samtalen automatisk`,{});
     dbgLog('daily','Inaktivitetstimer fyrt – stopConversation()',{});
     stopConversation();
-  }, INACTIVITY_TIMEOUT);
+  }, timeout);
 }
 
 function clearInactivityTimer(){
@@ -1381,8 +1404,13 @@ async function handleToolCall(event){
   const convId=event.conversation_id||conversationId;
   const s=getSettings();
 
-  // ── end_conversation: AI avslutter samtalen ──────────────────────
+  // ── end_conversation: AI avslutter samtalen (kun hvis aktivert i innstillinger) ──
   if(toolName==='end_conversation'||toolName==='end_call'||toolName==='goodbye'){
+    if(!s.enableEndTool){
+      // Funksjonaliteten er slått av – ignorer verktøyet
+      respondToTavus(convId,'Funksjonen for å avslutte samtalen er deaktivert.',toolCallId);
+      return;
+    }
     const farewell=args.message||args.farewell||args.text||'Ha det bra! Samtalen avsluttes nå.';
     addLog('info','👋 AI avslutter samtalen',{farewell});
     dbgLog('tool','end_conversation – avslutter om 3 sek',{farewell,tool_call_id:toolCallId});
