@@ -1273,64 +1273,22 @@ async function joinConversation(url){
   document.getElementById('v-label').textContent='Kobler til video...';
   const container=document.getElementById('daily-container'); container.innerHTML='';
 
-  // Clean up previous instances
+  // Clean up any previous Daily.js instances first
   if(dailyFrame){try{await dailyFrame.leave();}catch{}try{dailyFrame.destroy();}catch{}dailyFrame=null;}
   if(videoFrame){try{await videoFrame.leave();}catch{}try{videoFrame.destroy();}catch{}videoFrame=null;}
 
+  // STRATEGI: plain <iframe> for video (ingen Daily.js konflikter) +
+  //           createCallObject headless for å motta app-message events (tool calls, transkripsjon).
+  //           createFrame videresender IKKE app-message pålitelig, og konflikter med callObject.
+  _mountRawIframe(container, url);
+  clearVideoLoading();
+
   if(typeof window.DailyIframe==='undefined'){
-    // No Daily.js – raw iframe, no tool calls
-    _mountRawIframe(container,url);
-    clearVideoLoading();
-    addLog('info','Video åpnet (ingen tool calls)',{});
+    addLog('info','Video åpnet (Daily.js ikke lastet – ingen tool calls)',{});
     return;
   }
-
-  try{
-    // createFrame: Daily prebuilt UI handles video + forwards app-message events reliably
-    const frame=window.DailyIframe.createFrame(container,{
-      iframeStyle:{position:'absolute',inset:'0',width:'100%',height:'100%',border:'none'},
-      showLeaveButton:false,
-      showFullscreenButton:false,
-      activeSpeakerMode:true,
-    });
-    dailyFrame=frame;
-
-    // Pin AI replica as main large view when it joins
-    frame.on('participant-joined',evt=>{
-      if(!evt.participant.local){
-        try{frame.pinParticipant({sessionId:evt.participant.session_id});}catch{}
-        dbgLog('daily','👤 AI-replika pinnet: '+(evt.participant.user_name||evt.participant.session_id),{});
-      }
-    });
-
-    // app-message is forwarded from Daily iframe to parent by Daily.js
-    frame.on('app-message',evt=>{
-      dbgLog('daily','📨 app-message',{data:evt?.data,fromId:evt?.fromId});
-      handleAppMessage(evt?.data);
-    });
-
-    frame.on('joined-meeting',()=>{
-      addLog('info','🟢 Daily tilkoblet – tool calls aktiv',{});
-      dbgLog('daily','✅ joined-meeting ✓',{});
-    });
-
-    frame.on('error',e=>{
-      dbgLog('daily','❌ createFrame error',{error:e?.errorMsg||e},true);
-    });
-
-    // Clear the loading overlay immediately – the Daily iframe is now in the DOM
-    // and the user can see it connecting. Don't wait for joined-meeting.
-    clearVideoLoading();
-
-    // Start join in background – fire and forget
-    frame.join({url}).catch(err=>{
-      dbgLog('daily','❌ frame.join() rejected: '+err?.message,{},true);
-    });
-
-  }catch(err){
-    dbgLog('daily','❌ createFrame feilet: '+err?.message,{},true);
-    _fallbackIframe(container,url);
-  }
+  // Headless listener starter i bakgrunnen
+  startDailyListener(url);
 }
 
 function clearVideoLoading(){
@@ -1367,28 +1325,42 @@ function _mountRawIframe(container,url){
   container.appendChild(iframe);
 }
 
-function _fallbackIframe(container,url){
-  if(dailyFrame){try{dailyFrame.destroy();}catch{}dailyFrame=null;}
-  container.innerHTML='';
-  _mountRawIframe(container,url);
-  clearVideoLoading();
-  addLog('info','Video (iframe fallback) – starter headless lytter',{});
-  dbgLog('daily','⚠️ Falt tilbake til iframe + headless lytter',{});
-  startDailyListener(url);
-}
 
 async function startDailyListener(url){
   if(typeof window.DailyIframe==='undefined') return;
   try{
+    // Rydd opp eventuelle gjenværende instanser
     if(dailyFrame){try{await dailyFrame.leave();}catch{}try{dailyFrame.destroy();}catch{}dailyFrame=null;}
-    const call=window.DailyIframe.createCallObject({audioSource:false,videoSource:false});
+
+    const call=window.DailyIframe.createCallObject({
+      audioSource:false,   // headless – ingen lyd/video fra vår side
+      videoSource:false,
+    });
     dailyFrame=call;
-    call.on('joined-meeting',()=>{addLog('info','🟢 Headless lytter aktiv',{});dbgLog('daily','headless joined ✓',{});});
-    call.on('app-message',evt=>{dbgLog('daily','📨 headless app-message',{data:evt?.data});handleAppMessage(evt?.data);});
-    call.on('error',e=>{dbgLog('daily','❌ headless error',{error:e?.errorMsg},true);});
-    await Promise.race([call.join({url}),new Promise((_,r)=>setTimeout(()=>r(new Error('timeout')),20000))]);
+
+    call.on('joined-meeting',()=>{
+      addLog('info','🟢 Daily events aktiv (tool calls + transkripsjon)',{});
+      dbgLog('daily','✅ headless joined – lytter på app-message',{});
+    });
+    call.on('app-message',evt=>{
+      dbgLog('daily','📨 app-message mottatt',{data:evt?.data,fromId:evt?.fromId});
+      handleAppMessage(evt?.data);
+    });
+    call.on('participant-joined',evt=>{
+      dbgLog('daily','👤 deltaker: '+(evt.participant.user_name||evt.participant.session_id),{local:evt.participant.local});
+    });
+    call.on('error',e=>{
+      dbgLog('daily','❌ headless Daily feil',{error:e?.errorMsg||e},true);
+    });
+    call.on('left-meeting',()=>{
+      dbgLog('daily','⬜ headless Daily forlot møtet',{});
+    });
+
+    dbgLog('daily','⏳ headless join starter…',{url});
+    await call.join({url});   // venter til vi er med i rommet
   }catch(err){
-    dbgLog('daily','❌ headless lytter feilet: '+err?.message,{},true);
+    dbgLog('daily','❌ startDailyListener feilet: '+err?.message,{},true);
+    addLog('info','⚠️ Daily events utilgjengelig: '+err?.message,{});
   }
 }
 
@@ -1409,7 +1381,7 @@ async function stopConversation(){
   document.getElementById('btn-header-stop').style.display='none';
   document.getElementById('btn-stop').style.display='none'; document.getElementById('btn-start').style.display='block'; document.getElementById('btn-start').disabled=false;
   document.getElementById('conv-id-row').style.display='none';
-  conversationId=null; setStatus('ended','Avsluttet'); addLog('info','Samtale avsluttet',{});
+  farewellPending=false; conversationId=null; setStatus('ended','Avsluttet'); addLog('info','Samtale avsluttet',{});
 }
 
 // ================================================================
