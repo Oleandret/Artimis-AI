@@ -385,16 +385,26 @@ code{color:var(--accent);font-family:monospace}
           <div class="section">
             <div class="section-title">🔚 Avslutt samtale</div>
             <div class="toggle-row">
-              <label>La AI avslutte ved «ha det» o.l.</label>
-              <label class="toggle"><input type="checkbox" id="s-enable-end-tool" checked><span class="toggle-slider"></span></label>
+              <div>
+                <div style="font-size:13px;font-weight:500">Jeg kan avslutte med stemme</div>
+                <div style="font-size:11px;color:var(--muted);margin-top:2px">Si «ha det», «adjø», «avslutt samtalen» o.l. for å avslutte</div>
+              </div>
+              <label class="toggle"><input type="checkbox" id="s-user-can-end" checked><span class="toggle-slider"></span></label>
             </div>
-            <div class="field" id="s-inactivity-row">
+            <div class="toggle-row" style="margin-top:8px">
+              <div>
+                <div style="font-size:13px;font-weight:500">AI kan avslutte samtalen</div>
+                <div style="font-size:11px;color:var(--muted);margin-top:2px">AI bruker end_conversation-verktøyet (krever persona-push)</div>
+              </div>
+              <label class="toggle"><input type="checkbox" id="s-enable-end-tool"><span class="toggle-slider"></span></label>
+            </div>
+            <div class="field" style="margin-top:10px">
               <label>Auto-avslutt etter inaktivitet</label>
               <div style="display:flex;align-items:center;gap:8px">
                 <input type="number" id="s-inactivity-timeout" placeholder="0 = av" min="0" max="600" style="width:80px">
                 <span style="color:var(--muted);font-size:12px">sekunder (0 = av)</span>
               </div>
-              <div style="font-size:11px;color:var(--muted);margin-top:4px">Samtalen avsluttes automatisk hvis ingen snakker på X sekunder.</div>
+              <div style="font-size:11px;color:var(--muted);margin-top:4px">Avsluttes automatisk etter X sekunder uten tale.</div>
             </div>
           </div>
           <div class="section">
@@ -702,6 +712,7 @@ function getSettings() {
     leftTimeout:    parseInt(localStorage.getItem('left_timeout')    || '0') || null,
     callbackUrl:    localStorage.getItem('callback_url')        || '',
     enableEndTool:  localStorage.getItem('enable_end_tool') === 'true', // default OFF
+    userCanEnd:     localStorage.getItem('user_can_end') !== 'false',  // default ON
     inactivityTimeout: parseInt(localStorage.getItem('inactivity_timeout') || '0') || 0,
     enableRecording:    localStorage.getItem('enable_recording')     === 'true',
     enableTranscription: localStorage.getItem('enable_transcription') === 'true',
@@ -809,7 +820,7 @@ function readForm() {
     apiKey:v('s-api-key'), personaId:v('s-persona-id'), replicaId:v('s-replica-id'),
     personaName:v('s-persona-name'), pipelineMode:v('s-pipeline-mode'), contextWindow:v('s-context-window'),
     maxDuration:ni('s-max-duration'), absentTimeout:ni('s-absent-timeout'), leftTimeout:ni('s-left-timeout'),
-    callbackUrl:v('s-callback-url'), enableEndTool:cb('s-enable-end-tool'), inactivityTimeout:ni('s-inactivity-timeout'),
+    callbackUrl:v('s-callback-url'), enableEndTool:cb('s-enable-end-tool'), userCanEnd:cb('s-user-can-end'), inactivityTimeout:ni('s-inactivity-timeout'),
     enableRecording:cb('s-enable-recording'),
     enableTranscription:cb('s-enable-transcription'), applyGreenscreen:cb('s-apply-greenscreen'),
     s3Bucket:v('s-s3-bucket'), s3Region:v('s-s3-region'),
@@ -842,7 +853,7 @@ function saveSettings() {
     tavus_api_key:s.apiKey, tavus_persona_id:s.personaId, tavus_replica_id:s.replicaId,
     persona_name:s.personaName, pipeline_mode:s.pipelineMode, context_window:s.contextWindow,
     max_duration:s.maxDuration||'', absent_timeout:s.absentTimeout||'', left_timeout:s.leftTimeout||'',
-    callback_url:s.callbackUrl, enable_end_tool:s.enableEndTool, inactivity_timeout:s.inactivityTimeout||0,
+    callback_url:s.callbackUrl, enable_end_tool:s.enableEndTool, user_can_end:s.userCanEnd, inactivity_timeout:s.inactivityTimeout||0,
     enable_recording:s.enableRecording, enable_transcription:s.enableTranscription,
     apply_greenscreen:s.applyGreenscreen, s3_bucket:s.s3Bucket, s3_region:s.s3Region,
     llm_model:s.llmModel, llm_base_url:s.llmBaseUrl, llm_custom_model:s.llmCustomModel, llm_api_key:s.llmApiKey,
@@ -876,7 +887,7 @@ function loadSettingsIntoForm() {
   sv('s-persona-name',s.personaName); sv('s-pipeline-mode',s.pipelineMode); sv('s-context-window',s.contextWindow);
   sv('s-max-duration',s.maxDuration||''); sv('s-absent-timeout',s.absentTimeout||''); sv('s-left-timeout',s.leftTimeout||'');
   sv('s-callback-url',s.callbackUrl); sv('s-callback-url-2',s.callbackUrl);
-  scb('s-enable-end-tool',s.enableEndTool); sv('s-inactivity-timeout',s.inactivityTimeout||'');
+  scb('s-enable-end-tool',s.enableEndTool); scb('s-user-can-end',s.userCanEnd); sv('s-inactivity-timeout',s.inactivityTimeout||'');
   scb('s-enable-recording',s.enableRecording); scb('s-enable-transcription',s.enableTranscription);
   scb('s-apply-greenscreen',s.applyGreenscreen); sv('s-s3-bucket',s.s3Bucket); sv('s-s3-region',s.s3Region);
   const knownModels=['tavus-gpt-oss','tavus-claude-haiku-4.5','tavus-gemini-2.5-flash','tavus-gpt-5.2','tavus-gemini-3-flash'];
@@ -1185,6 +1196,27 @@ async function startConversation(){
   }
 }
 
+// Farewell phrase detection – avslutter samtalen direkte fra brukerens tale
+// Brukes som primær mekanisme i stedet for end_conversation tool call
+const FAREWELL_PHRASES = [
+  'ha det','ha det bra','hade','adjø','farvel','bye','goodbye',
+  'avslutt samtalen','avslutt nå','vi er ferdige','vi er ferdig',
+  'takk for praten','takk for samtalen','det var alt',
+  'stopp samtalen','stopp nå','avslutter nå'
+];
+function checkFarewellPhrase(text){
+  if(!text||!conversationId) return;
+  const s=getSettings();
+  if(!s.userCanEnd) return;
+  const lower=text.toLowerCase().trim();
+  const matched=FAREWELL_PHRASES.find(p=>lower.includes(p));
+  if(matched){
+    addLog('info','👋 Farvelsfrase oppdaget: "'+matched+'" – avslutter om 2 sek',{});
+    dbgLog('tool','Farvelsfrase: '+matched+' → stopConversation',{text});
+    setTimeout(()=>stopConversation(),2000);
+  }
+}
+
 // ================================================================
 // JOIN
 // ================================================================
@@ -1216,6 +1248,7 @@ function handleAppMessage(d) {
       if (eventText) { addTranscriptLine('user', eventText); lastUserUtterance = eventText; }
       dbgLog('daily', 'bruker: ' + eventText.slice(0,80), p);
       resetInactivityTimer();
+      checkFarewellPhrase(eventText);
     } else {
       addLog('incoming', 'Tavus: ' + d.event_type, p);
       dbgLog('daily', 'Daily event: ' + d.event_type, p);
