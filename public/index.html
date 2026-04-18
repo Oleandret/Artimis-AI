@@ -1053,6 +1053,7 @@ function buildTtsLayer(s){
 // TOOL DEFINITIONS
 // ================================================================
 function makeHomeyToolDef(){return{type:'function',function:{name:'homey_tool',description:'Kontroller smarthuset via Homey. Bruk for ALT som handler om lys, temperatur, enheter, scener, alarmer og hjemmeautomasjon. Send hele kommandoen på norsk i "query".',parameters:{type:'object',properties:{query:{type:'string',description:'Hele kommandoen på norsk bokmål'}},required:['query']}}};}
+function makeEndConversationToolDef(){return{type:'function',function:{name:'end_conversation',description:'Avslutt samtalen. Bruk dette verktøyet når brukeren sier ha det, adjø, avslutter, takk for nå, eller på annen måte signaliserer at de vil avslutte. Si en kort, naturlig avskjedshilsen i "message".',parameters:{type:'object',properties:{message:{type:'string',description:'Kort avskjedshilsen som sies rett før samtalen avsluttes, på norsk bokmål'}},required:['message']}}};}
 
 // ================================================================
 // PUSH PERSONA
@@ -1075,6 +1076,8 @@ async function pushPersonaToTavus(){
   const homeyToolAlreadyDefined=toolDefs.some(t=>t.function?.name==='homey_tool');
   if(homeyEnabled&&!homeyToolAlreadyDefined) toolDefs.push(makeHomeyToolDef());
   const idx=toolDefs.findIndex(t=>t.function?.name==='homey_tool'); if(idx>=0) toolDefs[idx]=makeHomeyToolDef();
+  // end_conversation er alltid med som standardverktøy
+  if(!toolDefs.some(t=>t.function?.name==='end_conversation')) toolDefs.push(makeEndConversationToolDef());
   const p=(path,value)=>({op:'add',path,value});
   const patches=[p('/system_prompt',s.systemPrompt),p('/greeting',s.greeting),p('/pipeline_mode',s.pipelineMode),p('/layers/llm/model',effectiveModel),p('/layers/llm/tools',toolDefs)];
   if(s.personaName)patches.push(p('/persona_name',s.personaName));
