@@ -1209,7 +1209,7 @@ async function joinConversation(url){
   }
 
   try{
-    // createFrame: Daily prebuilt UI handles video + forwards app-message events
+    // createFrame: Daily prebuilt UI handles video + forwards app-message events reliably
     const frame=window.DailyIframe.createFrame(container,{
       iframeStyle:{position:'absolute',inset:'0',width:'100%',height:'100%',border:'none'},
       showLeaveButton:false,
@@ -1218,7 +1218,7 @@ async function joinConversation(url){
     });
     dailyFrame=frame;
 
-    // Pin AI replica as main large view
+    // Pin AI replica as main large view when it joins
     frame.on('participant-joined',evt=>{
       if(!evt.participant.local){
         try{frame.pinParticipant({sessionId:evt.participant.session_id});}catch{}
@@ -1226,44 +1226,32 @@ async function joinConversation(url){
       }
     });
 
-    // app-message forwarded from iframe to parent by Daily.js – this is the reliable path
+    // app-message is forwarded from Daily iframe to parent by Daily.js
     frame.on('app-message',evt=>{
       dbgLog('daily','📨 app-message',{data:evt?.data,fromId:evt?.fromId});
       handleAppMessage(evt?.data);
     });
 
     frame.on('joined-meeting',()=>{
-      clearVideoLoading();
-      addLog('info','🟢 Tilkoblet – tool calls aktiv',{});
-      dbgLog('daily','✅ createFrame joined-meeting ✓',{});
+      addLog('info','🟢 Daily tilkoblet – tool calls aktiv',{});
+      dbgLog('daily','✅ joined-meeting ✓',{});
     });
 
     frame.on('error',e=>{
       dbgLog('daily','❌ createFrame error',{error:e?.errorMsg||e},true);
     });
 
-    dbgLog('daily','⏳ createFrame.join() starter...',{url:url?.slice(0,80)});
+    // Clear the loading overlay immediately – the Daily iframe is now in the DOM
+    // and the user can see it connecting. Don't wait for joined-meeting.
+    clearVideoLoading();
 
-    // No hard timeout – let Daily prebuilt UI take the time it needs.
-    // joined-meeting fires when ready; clearVideoLoading() is called there.
-    frame.join({url}).then(()=>{
-      dbgLog('daily','✅ frame.join() resolved',{});
-    }).catch(err=>{
+    // Start join in background – fire and forget
+    frame.join({url}).catch(err=>{
       dbgLog('daily','❌ frame.join() rejected: '+err?.message,{},true);
-      _fallbackIframe(container,url);
     });
 
-    // Show fallback link after 10s if still loading
-    setTimeout(()=>{
-      if(document.getElementById('v-starting')?.style.display!=='none'){
-        document.getElementById('v-link').href=url;
-        document.getElementById('v-link').textContent=url;
-        document.getElementById('v-fallback').style.display='block';
-      }
-    },10000);
-
   }catch(err){
-    dbgLog('daily','❌ createFrame setup feilet: '+err?.message,{},true);
+    dbgLog('daily','❌ createFrame feilet: '+err?.message,{},true);
     _fallbackIframe(container,url);
   }
 }
