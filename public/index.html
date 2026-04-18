@@ -53,11 +53,11 @@ header{display:flex;align-items:center;justify-content:space-between;padding:8px
 .vco-timer{font-family:monospace;font-size:14px;font-weight:700;color:var(--text);letter-spacing:2px;min-width:60px;text-align:center}
 .vco-dot{width:8px;height:8px;border-radius:50%;background:var(--green);animation:pulse 1.5s infinite;flex-shrink:0}
 
-/* DRAWER */
-.drawer{width:0;flex-shrink:0;background:var(--surface);border-left:1px solid var(--border);display:flex;flex-direction:column;transition:width .25s ease;overflow:hidden}
-.drawer.open{width:440px}
-@media(max-width:700px){.drawer.open{position:absolute;right:0;top:0;bottom:0;width:100%;z-index:50}}
-.drawer-head{display:flex;align-items:center;border-bottom:1px solid var(--border);flex-shrink:0;padding:0 4px 0 0}
+/* DRAWER – slides from the LEFT */
+.drawer{width:0;flex-shrink:0;background:var(--surface);border-right:1px solid var(--border);display:flex;flex-direction:column;transition:width .25s ease;overflow:hidden;order:-1}
+.drawer.open{width:380px}
+@media(max-width:700px){.drawer.open{position:absolute;left:0;top:0;bottom:0;width:100%;z-index:50}}
+.drawer-head{display:flex;align-items:center;border-bottom:1px solid var(--border);flex-shrink:0;padding:0 0 0 4px}
 .drawer-tabs{display:flex;flex:1;overflow-x:auto}
 .drawer-tab{padding:10px 14px;border:none;background:transparent;color:var(--muted);cursor:pointer;font-size:12px;font-weight:500;border-bottom:2px solid transparent;white-space:nowrap;transition:color .15s}
 .drawer-tab:hover{color:var(--text)}
@@ -1142,12 +1142,10 @@ async function startConversation(){
     document.getElementById('conv-id-display').textContent=conversationId;
     document.getElementById('conv-id-row').style.display='block';
     await joinConversation(data.conversation_url);
-    document.getElementById('vco').classList.add('visible');
     document.getElementById('btn-header-start').style.display='none';
     document.getElementById('btn-header-stop').style.display='flex';
     document.getElementById('btn-stop').style.display='block';
     document.getElementById('btn-start').style.display='none';
-    startVcoTimer();
   }catch(err){
     const msg=err.message||'Ukjent feil';
     addLog('error','Feil ved oppstart',{message:msg}); dbgLog('tavus','Feil: '+msg,{error:msg},true);
@@ -1196,61 +1194,117 @@ function handleAppMessage(d) {
 
 async function joinConversation(url){
   document.getElementById('v-label').textContent='Kobler til video...';
-  const fallbackTimer=setTimeout(()=>{document.getElementById('v-link').href=url;document.getElementById('v-link').textContent=url;document.getElementById('v-fallback').style.display='block';},5000);
   const container=document.getElementById('daily-container'); container.innerHTML='';
+
+  // Clean up previous instances
+  if(dailyFrame){try{await dailyFrame.leave();}catch{}try{dailyFrame.destroy();}catch{}dailyFrame=null;}
+  if(videoFrame){try{await videoFrame.leave();}catch{}try{videoFrame.destroy();}catch{}videoFrame=null;}
+
+  if(typeof window.DailyIframe==='undefined'){
+    // No Daily.js – raw iframe, no tool calls
+    _mountRawIframe(container,url);
+    clearVideoLoading();
+    addLog('info','Video åpnet (ingen tool calls)',{});
+    return;
+  }
+
+  try{
+    // createFrame: Daily prebuilt UI handles video + forwards app-message events
+    const frame=window.DailyIframe.createFrame(container,{
+      iframeStyle:{position:'absolute',inset:'0',width:'100%',height:'100%',border:'none'},
+      showLeaveButton:false,
+      showFullscreenButton:false,
+      activeSpeakerMode:true,
+    });
+    dailyFrame=frame;
+
+    // Pin AI replica as main large view
+    frame.on('participant-joined',evt=>{
+      if(!evt.participant.local){
+        try{frame.pinParticipant({sessionId:evt.participant.session_id});}catch{}
+        dbgLog('daily','👤 AI-replika pinnet: '+(evt.participant.user_name||evt.participant.session_id),{});
+      }
+    });
+
+    // app-message forwarded from iframe to parent by Daily.js – this is the reliable path
+    frame.on('app-message',evt=>{
+      dbgLog('daily','📨 app-message',{data:evt?.data,fromId:evt?.fromId});
+      handleAppMessage(evt?.data);
+    });
+
+    frame.on('joined-meeting',()=>{
+      clearVideoLoading();
+      addLog('info','🟢 Tilkoblet – tool calls aktiv',{});
+      dbgLog('daily','✅ createFrame joined-meeting ✓',{});
+    });
+
+    frame.on('error',e=>{
+      dbgLog('daily','❌ createFrame error',{error:e?.errorMsg||e},true);
+    });
+
+    dbgLog('daily','⏳ createFrame.join() starter...',{url:url?.slice(0,80)});
+
+    // No hard timeout – let Daily prebuilt UI take the time it needs.
+    // joined-meeting fires when ready; clearVideoLoading() is called there.
+    frame.join({url}).then(()=>{
+      dbgLog('daily','✅ frame.join() resolved',{});
+    }).catch(err=>{
+      dbgLog('daily','❌ frame.join() rejected: '+err?.message,{},true);
+      _fallbackIframe(container,url);
+    });
+
+    // Show fallback link after 10s if still loading
+    setTimeout(()=>{
+      if(document.getElementById('v-starting')?.style.display!=='none'){
+        document.getElementById('v-link').href=url;
+        document.getElementById('v-link').textContent=url;
+        document.getElementById('v-fallback').style.display='block';
+      }
+    },10000);
+
+  }catch(err){
+    dbgLog('daily','❌ createFrame setup feilet: '+err?.message,{},true);
+    _fallbackIframe(container,url);
+  }
+}
+
+function clearVideoLoading(){
+  document.getElementById('v-starting').style.display='none';
+  setStatus('active','Aktiv');
+  document.getElementById('vco').classList.add('visible');
+  startVcoTimer();
+  addLog('info','Video aktiv ✓',{});
+}
+
+function _mountRawIframe(container,url){
   const iframe=document.createElement('iframe');
   iframe.src=url; iframe.allow='camera *; microphone *; fullscreen *; display-capture *; speaker *; autoplay *';
   iframe.style.cssText='position:absolute;inset:0;width:100%;height:100%;border:none;';
   container.appendChild(iframe);
-  clearTimeout(fallbackTimer);
-  document.getElementById('v-starting').style.display='none';
-  setStatus('active','Aktiv');
-  addLog('info','Video åpnet ✓',{url}); dbgLog('daily','Video iframe åpnet ✓',{url:url?.slice(0,80)+'...'});
+}
+
+function _fallbackIframe(container,url){
+  if(dailyFrame){try{dailyFrame.destroy();}catch{}dailyFrame=null;}
+  container.innerHTML='';
+  _mountRawIframe(container,url);
+  clearVideoLoading();
+  addLog('info','Video (iframe fallback) – starter headless lytter',{});
+  dbgLog('daily','⚠️ Falt tilbake til iframe + headless lytter',{});
   startDailyListener(url);
 }
 
 async function startDailyListener(url){
-  if(typeof window.DailyIframe==='undefined'){addLog('info','Daily.js ikke lastet',{});dbgLog('daily','Daily.js ikke tilgjengelig – INGEN TOOL CALLS',{},true);return;}
+  if(typeof window.DailyIframe==='undefined') return;
   try{
-    if(dailyFrame){try{await dailyFrame.leave();}catch{}try{await dailyFrame.destroy();}catch{}dailyFrame=null;}
-    if(videoFrame){try{await videoFrame.leave();}catch{}try{videoFrame.destroy();}catch{}videoFrame=null;}
+    if(dailyFrame){try{await dailyFrame.leave();}catch{}try{dailyFrame.destroy();}catch{}dailyFrame=null;}
     const call=window.DailyIframe.createCallObject({audioSource:false,videoSource:false});
     dailyFrame=call;
-
-    call.on('joined-meeting', evt => {
-      addLog('info','🟢 Daily.js lytter aktiv – tool calls klar',{});
-      dbgLog('daily','✅ joined-meeting ✓ – callObject er i rommet, klar for tool calls',{localSessionId: evt?.participants?.local?.session_id||'ukjent'});
-    });
-
-    // Log ALL incoming app-messages (raw) so we can see exactly what Tavus sends
-    call.on('app-message', evt => {
-      dbgLog('daily','📨 RAW app-message mottatt',{data: evt?.data, fromId: evt?.fromId});
-      handleAppMessage(evt?.data);
-    });
-
-    call.on('participant-joined', evt => {
-      dbgLog('daily','👤 Deltaker i rommet: '+(evt?.participant?.user_name||evt?.participant?.session_id||'ukjent'),{local:evt?.participant?.local});
-    });
-
-    call.on('error', e => {
-      addLog('info','🔴 Daily feil: '+(e?.errorMsg||JSON.stringify(e)),{});
-      dbgLog('daily','❌ Daily.js error',{error: e?.errorMsg||e, type: e?.type},true);
-    });
-
-    call.on('left-meeting', () => {
-      dbgLog('daily','ℹ️ callObject forlot rommet',{});
-    });
-
-    dbgLog('daily','⏳ Prøver call.join() med URL...',{url: url?.slice(0,80)});
-    await Promise.race([
-      call.join({url}),
-      new Promise((_,r)=>setTimeout(()=>r(new Error('join-timeout-15s')),15000))
-    ]);
-    dbgLog('daily','✅ call.join() fullført',{});
+    call.on('joined-meeting',()=>{addLog('info','🟢 Headless lytter aktiv',{});dbgLog('daily','headless joined ✓',{});});
+    call.on('app-message',evt=>{dbgLog('daily','📨 headless app-message',{data:evt?.data});handleAppMessage(evt?.data);});
+    call.on('error',e=>{dbgLog('daily','❌ headless error',{error:e?.errorMsg},true);});
+    await Promise.race([call.join({url}),new Promise((_,r)=>setTimeout(()=>r(new Error('timeout')),20000))]);
   }catch(err){
-    addLog('info','🔴 Daily.js lytter IKKE aktiv – '+err?.message,{});
-    dbgLog('daily','❌ startDailyListener feilet: '+err?.message,{error:err?.message},true);
-    // Keep dailyFrame set so sendAppMessage attempts are logged, not silently dropped
+    dbgLog('daily','❌ headless lytter feilet: '+err?.message,{},true);
   }
 }
 
