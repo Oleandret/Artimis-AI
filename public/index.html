@@ -1347,13 +1347,15 @@ async function callMcpTool(mcpUrl,toolName,args){
 // ================================================================
 async function handleToolCall(event){
   const props=event.properties||{};
-  const toolName=props.tool_name||props.name||'ask_tool';
-  const toolCallId=props.tool_call_id||props.id||props.call_id||null;
+  const toolName=props.tool_name||props.name||event.tool_name||'ask_tool';
+  // tool_call_id can appear at multiple levels depending on Tavus version
+  const toolCallId=props.tool_call_id||props.id||props.call_id
+                  ||event.tool_call_id||event.id||null;
   let args={};
-  const rawArgs=props.tool_arguments??props.arguments??props.parameters??props.input??'{}';
+  const rawArgs=props.tool_arguments??props.arguments??props.parameters??props.input??event.tool_arguments??'{}';
   try{args=typeof rawArgs==='string'?JSON.parse(rawArgs):(rawArgs||{});}catch{}
-  addLog('tool_call',`Tool call: ${toolName}`,{args,raw:rawArgs});
-  dbgLog('tool',`Ruting: ${toolName}`,{tool_name:toolName,tool_call_id:toolCallId,args_parsed:args});
+  addLog('tool_call',`Tool call: ${toolName}`,{args,raw:rawArgs,tool_call_id:toolCallId});
+  dbgLog('tool',`Ruting: ${toolName}`,{tool_name:toolName,tool_call_id:toolCallId,args_parsed:args,full_event:event});
   const convId=event.conversation_id||conversationId;
   const s=getSettings();
 
@@ -1361,10 +1363,12 @@ async function handleToolCall(event){
   if(toolName==='end_conversation'||toolName==='end_call'||toolName==='goodbye'){
     const farewell=args.message||args.farewell||args.text||'Ha det bra! Samtalen avsluttes nå.';
     addLog('info','👋 AI avslutter samtalen',{farewell});
-    dbgLog('tool','end_conversation kalt – avslutter om 3 sek',{farewell});
-    // Send farewell message back so the AI speaks it before disconnect
-    respondToTavus(convId,farewell,toolCallId);
-    // Stop after a short pause so the AI can finish speaking
+    dbgLog('tool','end_conversation – avslutter om 3 sek',{farewell,tool_call_id:toolCallId});
+    // Send tool_result so AI speaks the farewell before we disconnect
+    if(toolCallId){
+      respondToTavus(convId,farewell,toolCallId);
+    }
+    // Stop after pause so AI can finish speaking
     setTimeout(()=>stopConversation(),3500);
     return;
   }
@@ -1416,7 +1420,7 @@ function respondToTavus(convId,text,toolCallId){
   if(!dailyFrame){dbgLog('tavus','❌ respondToTavus: dailyFrame er null – kan ikke sende svar!',{text:text?.slice(0,80)},true);return;}
   try{
     if(toolCallId){dailyFrame.sendAppMessage({message_type:'conversation',event_type:'conversation.tool_result',conversation_id:convId,properties:{tool_call_id:toolCallId,output:text}},'*');addLog('outgoing','✓ Tool result sendt',{tool_call_id:toolCallId,text});dbgLog('tavus','→ conversation.tool_result sendt',{tool_call_id:toolCallId,output:text?.slice(0,120)});}
-    else{dailyFrame.sendAppMessage({message_type:'conversation',event_type:'conversation.respond',conversation_id:convId,properties:{text}},'*');addLog('outgoing','Svar sendt',{text});dbgLog('tavus','→ conversation.respond (ingen tool_call_id)',{text:text?.slice(0,120)},true);}
+    else{dailyFrame.sendAppMessage({message_type:'conversation',event_type:'conversation.respond',conversation_id:convId,properties:{text}},'*');addLog('outgoing','Svar sendt',{text});dbgLog('tavus','→ conversation.respond (uten tool_call_id)',{text:text?.slice(0,120)});}
   }catch(e){dbgLog('tavus','Feil ved sendAppMessage: '+e.message,{error:e.message},true);}
 }
 
