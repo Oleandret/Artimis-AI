@@ -646,6 +646,8 @@ let videoFrame = null;   // createFrame – video display + AI pinning
 let conversationId = null;
 let logCount = 0;
 let lastUserUtterance = '';
+let inactivityTimer = null;
+const INACTIVITY_TIMEOUT = 60000; // 1 minutt uten tale → avslutt automatisk
 const ICONS = { outgoing:'↗', incoming:'↙', tool_call:'⚙', n8n_request:'→', n8n_response:'←', error:'✗', info:'·' };
 
 // ================================================================
@@ -1053,7 +1055,7 @@ function buildTtsLayer(s){
 // TOOL DEFINITIONS
 // ================================================================
 function makeHomeyToolDef(){return{type:'function',function:{name:'homey_tool',description:'Kontroller smarthuset via Homey. Bruk for ALT som handler om lys, temperatur, enheter, scener, alarmer og hjemmeautomasjon. Send hele kommandoen på norsk i "query".',parameters:{type:'object',properties:{query:{type:'string',description:'Hele kommandoen på norsk bokmål'}},required:['query']}}};}
-function makeEndConversationToolDef(){return{type:'function',function:{name:'end_conversation',description:'Avslutt samtalen. Bruk dette verktøyet når brukeren sier ha det, adjø, avslutter, takk for nå, eller på annen måte signaliserer at de vil avslutte. Si en kort, naturlig avskjedshilsen i "message".',parameters:{type:'object',properties:{message:{type:'string',description:'Kort avskjedshilsen som sies rett før samtalen avsluttes, på norsk bokmål'}},required:['message']}}};}
+function makeEndConversationToolDef(){return{type:'function',function:{name:'end_conversation',description:'Avslutt samtalen. Bruk KUN dette verktøyet når brukeren eksplisitt og tydelig ber om å avslutte – for eksempel ved å si ha det, adjø, avslutt samtalen, vi er ferdig eller lignende direkte avskjedsfraser. IKKE bruk dette etter et vanlig spørsmål eller svar, selv om samtalen føles naturlig avsluttet. Vent alltid på en eksplisitt avskjedsbekreftelse fra brukeren.',parameters:{type:'object',properties:{message:{type:'string',description:'Kort naturlig avskjedshilsen på norsk bokmål'}},required:['message']}}};}
 
 // ================================================================
 // PUSH PERSONA
@@ -1176,6 +1178,7 @@ function handleAppMessage(d) {
     if (role === 'user' && text) lastUserUtterance = text;
     if (text) addTranscriptLine(role, text);
     addLog('incoming', 'Tavus: ' + d.event_type, d.properties || {});
+    resetInactivityTimer();
   } else {
     const p = d.properties || {};
     const eventText = p.transcript || p.text || p.content || '';
@@ -1185,9 +1188,11 @@ function handleAppMessage(d) {
     } else if (d.event_type === 'conversation.replica.stopped_speaking') {
       if (eventText) addTranscriptLine('replica', eventText);
       dbgLog('daily', 'replica: ' + eventText.slice(0,80), p);
+      resetInactivityTimer();
     } else if (d.event_type === 'conversation.user.stopped_speaking') {
       if (eventText) { addTranscriptLine('user', eventText); lastUserUtterance = eventText; }
       dbgLog('daily', 'bruker: ' + eventText.slice(0,80), p);
+      resetInactivityTimer();
     } else {
       addLog('incoming', 'Tavus: ' + d.event_type, p);
       dbgLog('daily', 'Daily event: ' + d.event_type, p);
@@ -1264,7 +1269,23 @@ function clearVideoLoading(){
   setStatus('active','Aktiv');
   document.getElementById('vco').classList.add('visible');
   startVcoTimer();
+  resetInactivityTimer();
   addLog('info','Video aktiv ✓',{});
+}
+
+function resetInactivityTimer(){
+  if(!conversationId) return; // bare aktiv under samtale
+  clearTimeout(inactivityTimer);
+  inactivityTimer=setTimeout(()=>{
+    addLog('info','⏱ 1 minutt uten aktivitet – avslutter samtalen',{});
+    dbgLog('daily','Inaktivitetstimer fyrt – stopConversation()',{});
+    stopConversation();
+  }, INACTIVITY_TIMEOUT);
+}
+
+function clearInactivityTimer(){
+  clearTimeout(inactivityTimer);
+  inactivityTimer=null;
 }
 
 function _mountRawIframe(container,url){
@@ -1305,6 +1326,7 @@ async function startDailyListener(url){
 let vcoTimerInterval=null,vcoSeconds=0;
 function startVcoTimer(){vcoSeconds=0;clearInterval(vcoTimerInterval);vcoTimerInterval=setInterval(()=>{vcoSeconds++;const m=String(Math.floor(vcoSeconds/60)).padStart(2,'0');const s=String(vcoSeconds%60).padStart(2,'0');const el=document.getElementById('vco-timer');if(el)el.textContent=m+':'+s;},1000);}
 async function stopConversation(){
+  clearInactivityTimer();
   clearInterval(vcoTimerInterval);
   if(dailyFrame){try{await dailyFrame.leave();}catch{}try{dailyFrame.destroy();}catch{}dailyFrame=null;}
   if(videoFrame){try{await videoFrame.leave();}catch{}try{videoFrame.destroy();}catch{}videoFrame=null;}
