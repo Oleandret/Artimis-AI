@@ -393,8 +393,8 @@ code{color:var(--accent);font-family:monospace}
             </div>
             <div class="toggle-row" style="margin-top:8px">
               <div>
-                <div style="font-size:13px;font-weight:500">AI kan avslutte samtalen</div>
-                <div style="font-size:11px;color:var(--muted);margin-top:2px">AI bruker end_conversation-verktøyet (krever persona-push)</div>
+                <div style="font-size:13px;font-weight:500">AI kan avslutte av seg selv</div>
+                <div style="font-size:11px;color:var(--muted);margin-top:2px">⚠️ La av – AI bestemmer selv når hun er ferdig. Bruk heller stemme-innstillingen over.</div>
               </div>
               <label class="toggle"><input type="checkbox" id="s-enable-end-tool"><span class="toggle-slider"></span></label>
             </div>
@@ -667,12 +667,14 @@ function switchStab(name, btn) {
 // STATE
 // ================================================================
 let dailyFrame = null;   // headless callObject – tool calls + sendAppMessage
-let videoFrame = null;   // createFrame – video display + AI pinning
+let videoFrame = null;   // unused – kept for cleanup safety
 let conversationId = null;
+let conversationStartTime = null; // settes når samtalen starter – brukes til å blokkere for tidlig end_conversation
 let logCount = 0;
 let lastUserUtterance = '';
 let inactivityTimer = null;
 const INACTIVITY_TIMEOUT = 60000; // 1 minutt uten tale → avslutt automatisk
+const MIN_CONVERSATION_DURATION = 60000; // AI kan IKKE avslutte de første 60 sek
 const ICONS = { outgoing:'↗', incoming:'↙', tool_call:'⚙', n8n_request:'→', n8n_response:'←', error:'✗', info:'·' };
 
 // ================================================================
@@ -1155,8 +1157,8 @@ async function startConversation(){
   try{
     const NORSK_LOCK='ABSOLUTT KRAV: Kommuniser KUN på norsk bokmål i hele samtalen. Aldri svar på engelsk eller andre språk. Oversett alltid engelske verktøysvar til norsk bokmål.';
     const END_LOCK=s.enableEndTool
-      ? 'Bruk end_conversation-verktøyet KUN når brukeren eksplisitt og tydelig sier de vil avslutte (f.eks. «ha det», «adjø», «avslutt nå»). IKKE avslutt etter et vanlig svar eller spørsmål.'
-      : 'IKKE avslutt samtalen automatisk under noen omstendighet. Fortsett alltid samtalen til brukeren avslutter manuelt. Ignorer end_conversation-verktøyet selv om det finnes.';
+      ? 'Du KAN bruke end_conversation-verktøyet, men BARE når brukeren eksplisitt og direkte ber deg avslutte samtalen – for eksempel «avslutt nå», «stopp samtalen» eller «vi er ferdige». ALDRI bruk det etter å ha svart på et spørsmål, selv om svaret virker komplett. ALDRI bruk det kun fordi brukeren sier «ha det» eller «takk» – de kan ha flere spørsmål. Vent alltid til brukeren tydelig bekrefter at de vil avslutte.'
+      : 'STRENGT FORBUD: Du har IKKE tillatelse til å avslutte samtalen. Ignorer end_conversation-verktøyet fullstendig – kall det aldri under noen omstendighet. Fortsett alltid å svare på spørsmål. Brukeren avslutter samtalen selv når de er klare.';
     const userContext=s.convContext?s.convContext.trim():'';
     const fullContext=[NORSK_LOCK, END_LOCK, userContext].filter(Boolean).join('\n\n');
     const body={persona_id:s.personaId,conversational_context:fullContext};
@@ -1176,6 +1178,7 @@ async function startConversation(){
     if(!res.ok){const e=await res.text();throw new Error(`Tavus ${res.status}: ${e}`);}
     const data=await res.json();
     conversationId=data.conversation_id;
+    conversationStartTime=Date.now();
     addLog('incoming','Samtale opprettet ✓',{conversation_id:conversationId});
     dbgLog('tavus','Samtale opprettet ✓',{conversation_id:conversationId});
     document.getElementById('conv-id-display').textContent=conversationId;
@@ -1381,7 +1384,7 @@ async function stopConversation(){
   document.getElementById('btn-header-stop').style.display='none';
   document.getElementById('btn-stop').style.display='none'; document.getElementById('btn-start').style.display='block'; document.getElementById('btn-start').disabled=false;
   document.getElementById('conv-id-row').style.display='none';
-  farewellPending=false; conversationId=null; setStatus('ended','Avsluttet'); addLog('info','Samtale avsluttet',{});
+  farewellPending=false; conversationId=null; conversationStartTime=null; setStatus('ended','Avsluttet'); addLog('info','Samtale avsluttet',{});
 }
 
 // ================================================================
@@ -1425,21 +1428,26 @@ async function handleToolCall(event){
   const convId=event.conversation_id||conversationId;
   const s=getSettings();
 
-  // ── end_conversation: AI avslutter samtalen (kun hvis aktivert i innstillinger) ──
+  // ── end_conversation: AI avslutter samtalen ──
   if(toolName==='end_conversation'||toolName==='end_call'||toolName==='goodbye'){
     if(!s.enableEndTool){
-      // Funksjonaliteten er slått av – ignorer verktøyet
-      respondToTavus(convId,'Funksjonen for å avslutte samtalen er deaktivert.',toolCallId);
+      // Slått av – ignorer verktøyet stille
+      if(toolCallId) respondToTavus(convId,'OK, fortsetter samtalen.',toolCallId);
+      dbgLog('tool','end_conversation ignorert (deaktivert i innstillinger)',{});
+      return;
+    }
+    // Guard: AI kan IKKE avslutte innen de første 60 sekundene av samtalen
+    const elapsed = conversationStartTime ? (Date.now() - conversationStartTime) : 999999;
+    if(elapsed < MIN_CONVERSATION_DURATION){
+      if(toolCallId) respondToTavus(convId,'Jeg fortsetter samtalen.',toolCallId);
+      dbgLog('tool',`end_conversation blokkert – kun ${Math.round(elapsed/1000)}s inn i samtalen (min ${MIN_CONVERSATION_DURATION/1000}s)`,{elapsed});
+      addLog('info',`⛔ end_conversation blokkert (${Math.round(elapsed/1000)}s < 60s)`,{});
       return;
     }
     const farewell=args.message||args.farewell||args.text||'Ha det bra! Samtalen avsluttes nå.';
     addLog('info','👋 AI avslutter samtalen',{farewell});
-    dbgLog('tool','end_conversation – avslutter om 3 sek',{farewell,tool_call_id:toolCallId});
-    // Send tool_result so AI speaks the farewell before we disconnect
-    if(toolCallId){
-      respondToTavus(convId,farewell,toolCallId);
-    }
-    // Stop after pause so AI can finish speaking
+    dbgLog('tool','end_conversation – avslutter om 3 sek',{farewell,tool_call_id:toolCallId,elapsed_sec:Math.round(elapsed/1000)});
+    if(toolCallId) respondToTavus(convId,farewell,toolCallId);
     setTimeout(()=>stopConversation(),3500);
     return;
   }
