@@ -1199,21 +1199,27 @@ async function startConversation(){
 // Farewell phrase detection – avslutter samtalen direkte fra brukerens tale
 // Brukes som primær mekanisme i stedet for end_conversation tool call
 const FAREWELL_PHRASES = [
-  'ha det','ha det bra','hade','adjø','farvel','bye','goodbye',
-  'avslutt samtalen','avslutt nå','vi er ferdige','vi er ferdig',
-  'takk for praten','takk for samtalen','det var alt',
-  'stopp samtalen','stopp nå','avslutter nå'
+  'ha det bra','ha det','hade bra','hade',
+  'adjø','farvel','bye bye','bye','goodbye',
+  'avslutt samtalen','avslutt samtale','avslutt nå','avslutter nå',
+  'vi er ferdige','vi er ferdig','jeg er ferdig','ferdig nå',
+  'takk for praten','takk for samtalen','takk for i dag',
+  'stopp samtalen','stopp nå','vi kan avslutte',
+  'det var alt for i dag','det var alt'
 ];
+let farewellPending = false; // hindrer dobbeltkjøring
 function checkFarewellPhrase(text){
-  if(!text||!conversationId) return;
+  if(!text||!conversationId||farewellPending) return;
   const s=getSettings();
   if(!s.userCanEnd) return;
   const lower=text.toLowerCase().trim();
+  dbgLog('tool','🔍 Sjekker farvelsfrase: "'+lower.slice(0,80)+'"',{userCanEnd:s.userCanEnd});
   const matched=FAREWELL_PHRASES.find(p=>lower.includes(p));
   if(matched){
-    addLog('info','👋 Farvelsfrase oppdaget: "'+matched+'" – avslutter om 2 sek',{});
-    dbgLog('tool','Farvelsfrase: '+matched+' → stopConversation',{text});
-    setTimeout(()=>stopConversation(),2000);
+    farewellPending=true;
+    addLog('info','👋 Farvelsfrase: "'+matched+'" – avslutter om 2 sek',{});
+    dbgLog('tool','✅ Farvelsmatch: "'+matched+'" → stopConversation om 2 sek',{text});
+    setTimeout(()=>{farewellPending=false;stopConversation();},2000);
   }
 }
 
@@ -1230,7 +1236,10 @@ function handleAppMessage(d) {
   } else if (d.event_type === 'conversation.utterance') {
     const role = d.properties?.role || d.role;
     const text = d.properties?.transcript || d.properties?.text || '';
-    if (role === 'user' && text) lastUserUtterance = text;
+    if (role === 'user' && text) {
+      lastUserUtterance = text;
+      checkFarewellPhrase(text); // ← sjekk farvel på hvert bruker-utsagn
+    }
     if (text) addTranscriptLine(role, text);
     addLog('incoming', 'Tavus: ' + d.event_type, d.properties || {});
     resetInactivityTimer();
@@ -1238,7 +1247,11 @@ function handleAppMessage(d) {
     const p = d.properties || {};
     const eventText = p.transcript || p.text || p.content || '';
     if (['conversation.echo','conversation.transcription'].includes(d.event_type)) {
-      const role = p.role || 'user'; if (eventText) addTranscriptLine(role, eventText);
+      const role = p.role || 'user';
+      if (eventText) {
+        addTranscriptLine(role, eventText);
+        if (role === 'user') checkFarewellPhrase(eventText); // ← sjekk her også
+      }
       dbgLog('daily', `${d.event_type}: "${eventText.slice(0,80)}"`, p);
     } else if (d.event_type === 'conversation.replica.stopped_speaking') {
       if (eventText) addTranscriptLine('replica', eventText);
@@ -1248,7 +1261,7 @@ function handleAppMessage(d) {
       if (eventText) { addTranscriptLine('user', eventText); lastUserUtterance = eventText; }
       dbgLog('daily', 'bruker: ' + eventText.slice(0,80), p);
       resetInactivityTimer();
-      checkFarewellPhrase(eventText);
+      checkFarewellPhrase(eventText); // ← sjekk her også (backup)
     } else {
       addLog('incoming', 'Tavus: ' + d.event_type, p);
       dbgLog('daily', 'Daily event: ' + d.event_type, p);
