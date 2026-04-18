@@ -295,6 +295,7 @@ code{color:var(--accent);font-family:monospace}
           <div class="api-row" id="api-elevenlabs"><span class="api-dot"></span><span class="api-name">ElevenLabs</span><span class="api-val" id="apival-el">—</span></div>
           <div class="api-row" id="api-homey"><span class="api-dot"></span><span class="api-name">Homey MCP</span><span class="api-val" id="apival-homey">—</span></div>
           <div class="api-row" id="api-webhooks"><span class="api-dot"></span><span class="api-name">Webhooks</span><span class="api-val" id="apival-webhooks">—</span></div>
+          <div class="api-row" id="api-openclaw"><span class="api-dot"></span><span class="api-name">OpenClaw</span><span class="api-val" id="apival-openclaw">—</span></div>
           <button onclick="checkAllApis()" style="margin-top:2px;background:none;border:1px dashed var(--border);border-radius:6px;color:var(--muted);padding:5px;cursor:pointer;font-size:11px;width:100%">↻ Sjekk tilkoblinger</button>
         </div>
 
@@ -617,6 +618,32 @@ code{color:var(--accent);font-family:monospace}
             <div class="section-title">📡 Tavus Callback</div>
             <div class="field"><label>Callback URL</label><input type="url" id="s-callback-url-2" placeholder="https://..."></div>
           </div>
+          <div class="section">
+            <div class="section-title">🐾 OpenClaw</div>
+            <div style="background:rgba(99,102,241,.07);border:1px solid var(--accent);border-radius:8px;padding:9px 11px;font-size:11px;color:var(--text);line-height:1.7;margin-bottom:8px">
+              Kobler avataren direkte til OpenClaw som AI-hjerne.<br>
+              Avataren snakker det OpenClaw svarer — og omvendt.<br>
+              Krever at OpenClaw-gatewayen eksponerer et <strong>OpenAI-kompatibelt endepunkt</strong>.
+            </div>
+            <div class="toggle-row" style="margin-bottom:8px">
+              <div>
+                <div style="font-size:13px;font-weight:500">Bruk OpenClaw som LLM</div>
+                <div style="font-size:11px;color:var(--muted);margin-top:2px">Overstyrer Tavus sin innebygde AI med OpenClaw</div>
+              </div>
+              <label class="toggle"><input type="checkbox" id="s-openclaw-enabled"><span class="toggle-slider"></span></label>
+            </div>
+            <div class="field">
+              <label>Gateway URL <span style="color:var(--muted);font-size:10px">(OpenAI-kompatibelt endepunkt)</span></label>
+              <input type="url" id="s-openclaw-url" placeholder="https://din-openclaw.example.com/v1/chat/completions">
+              <div style="font-size:10px;color:var(--muted);margin-top:4px">Vanligvis: <code>https://din-server:18789/v1/chat/completions</code></div>
+            </div>
+            <div class="field">
+              <label>API-nøkkel <span style="color:var(--muted);font-size:10px">(hvis påkrevd)</span></label>
+              <input type="password" id="s-openclaw-api-key" placeholder="valgfritt">
+            </div>
+            <button onclick="testOpenclawConnection()" style="margin-top:4px;background:var(--card);border:1px solid var(--border);border-radius:7px;padding:7px 14px;color:var(--text);font-size:12px;cursor:pointer;width:100%">🔌 Test tilkobling</button>
+            <div id="openclaw-test-result" style="margin-top:6px;font-size:11px;display:none"></div>
+          </div>
         </div><!-- /stab-integrasjoner -->
 
       </div><!-- /stab-panels -->
@@ -775,6 +802,9 @@ function getSettings() {
     mcpServers:     JSON.parse(localStorage.getItem('tavus_mcp_servers') || '[]'),
     n8nAsCallback:  localStorage.getItem('n8n_as_callback')     === 'true',
     webhooks:       JSON.parse(localStorage.getItem('tavus_webhooks') || '[]'),
+    openclawEnabled: localStorage.getItem('openclaw_enabled')   === 'true',
+    openclawUrl:    localStorage.getItem('openclaw_url')        || '',
+    openclawApiKey: localStorage.getItem('openclaw_api_key')    || '',
   };
 }
 
@@ -846,6 +876,7 @@ function readForm() {
     backchannelWords:v('s-backchannel-words'), responseFrequency:nf('s-response-frequency'),
     n8nUrl:v('s-n8n-url'), n8nAuth:v('s-n8n-auth'), toolTimeout:ni('s-tool-timeout'),
     mcpServers:collectMcpServers(), n8nAsCallback:cb('s-n8n-as-callback'), webhooks:collectWebhooks(),
+    openclawEnabled:cb('s-openclaw-enabled'), openclawUrl:v('s-openclaw-url'), openclawApiKey:v('s-openclaw-api-key'),
   };
 }
 
@@ -877,6 +908,7 @@ function saveSettings() {
     tavus_n8n_url:s.n8nUrl, n8n_auth:s.n8nAuth, tool_timeout:s.toolTimeout||'',
     tavus_mcp_servers:JSON.stringify(s.mcpServers), n8n_as_callback:s.n8nAsCallback,
     tavus_webhooks:JSON.stringify(s.webhooks),
+    openclaw_enabled:s.openclawEnabled, openclaw_url:s.openclawUrl, openclaw_api_key:s.openclawApiKey,
   };
   Object.entries(map).forEach(([k,val]) => localStorage.setItem(k, val));
   saveServerSettings(map);
@@ -921,6 +953,10 @@ function loadSettingsIntoForm() {
   let whs = s.webhooks;
   if (!whs.length && s.n8nUrl) whs = [{ name:'ask_tool', url:s.n8nUrl, description:'Henter ekstern informasjon via n8n.', auth:'' }];
   renderWebhookList(whs);
+  // OpenClaw
+  scb('s-openclaw-enabled', s.openclawEnabled);
+  sv('s-openclaw-url', s.openclawUrl);
+  sv('s-openclaw-api-key', s.openclawApiKey);
   renderToolsDisplay(); checkNorskWarning();
 }
 
@@ -1163,6 +1199,13 @@ async function startConversation(){
     const fullContext=[NORSK_LOCK, END_LOCK, userContext].filter(Boolean).join('\n\n');
     const body={persona_id:s.personaId,conversational_context:fullContext};
     if(s.replicaId) body.replica_id=s.replicaId;
+    // OpenClaw: bruk som custom LLM-backend – avataren snakker direkte med OpenClaw
+    if(s.openclawEnabled && s.openclawUrl){
+      body.custom_llm_url=s.openclawUrl;
+      if(s.openclawApiKey) body.custom_llm_api_key=s.openclawApiKey;
+      addLog('info','🐾 OpenClaw aktivert som LLM-backend',{url:s.openclawUrl});
+      dbgLog('tavus','🐾 custom_llm_url → '+s.openclawUrl,{});
+    }
     const props={};
     if(s.maxDuration)props.max_call_duration=s.maxDuration;
     if(s.absentTimeout)props.participant_absent_timeout=s.absentTimeout;
@@ -1646,6 +1689,47 @@ async function checkAllApis(){
   setApiStatus('webhooks','checking','sjekker...');
   if(!s.webhooks.length)setApiStatus('webhooks','skip','ingen konfigurert');
   else{setApiStatus('webhooks','ok',s.webhooks.map(w=>w.name).join(', '));}
+  // OpenClaw
+  setApiStatus('openclaw','checking','sjekker...');
+  if(!s.openclawEnabled||!s.openclawUrl)setApiStatus('openclaw','skip',s.openclawUrl?'deaktivert':'ikke konfigurert');
+  else{
+    try{
+      const headers={'Content-Type':'application/json'};
+      if(s.openclawApiKey)headers['Authorization']='Bearer '+s.openclawApiKey;
+      const r=await fetch(s.openclawUrl,{method:'POST',headers,
+        body:JSON.stringify({model:'openclaw',messages:[{role:'user',content:'ping'}],max_tokens:1}),
+        signal:AbortSignal.timeout(5000)});
+      if(r.ok||r.status===400)setApiStatus('openclaw','ok','tilkoblet');
+      else setApiStatus('openclaw','err','HTTP '+r.status);
+    }catch(e){setApiStatus('openclaw',e.name==='TimeoutError'?'err':'warn',e.name==='TimeoutError'?'timeout':'⚠ CORS/nettfeil');}
+  }
+}
+
+async function testOpenclawConnection(){
+  const url=document.getElementById('s-openclaw-url')?.value?.trim();
+  const apiKey=document.getElementById('s-openclaw-api-key')?.value?.trim();
+  const resultEl=document.getElementById('openclaw-test-result');
+  if(!url){resultEl.style.display='block';resultEl.style.color='var(--red)';resultEl.textContent='⚠ Ingen URL angitt';return;}
+  resultEl.style.display='block';resultEl.style.color='var(--muted)';resultEl.textContent='⏳ Tester tilkobling...';
+  try{
+    const headers={'Content-Type':'application/json'};
+    if(apiKey)headers['Authorization']='Bearer '+apiKey;
+    const r=await fetch(url,{method:'POST',headers,
+      body:JSON.stringify({model:'openclaw',messages:[{role:'user',content:'Svar kun: OK'}],max_tokens:10}),
+      signal:AbortSignal.timeout(8000)});
+    const txt=await r.text();
+    if(r.ok){
+      let reply='';try{const d=JSON.parse(txt);reply=d.choices?.[0]?.message?.content||d.content||'';}catch{}
+      resultEl.style.color='var(--green)';
+      resultEl.textContent='✅ Tilkoblet! ' + (reply?'Svar: "'+reply.slice(0,60)+'"':'(tom respons – sjekk endepunkt)');
+    }else{
+      resultEl.style.color='var(--red)';
+      resultEl.textContent='❌ HTTP '+r.status+': '+txt.slice(0,120);
+    }
+  }catch(e){
+    resultEl.style.color='var(--red)';
+    resultEl.textContent='❌ '+(e.name==='TimeoutError'?'Timeout (>8s) – er serveren tilgjengelig?':'Feil: '+e.message);
+  }
 }
 
 // ================================================================
