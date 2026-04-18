@@ -1353,6 +1353,19 @@ async function handleToolCall(event){
   dbgLog('tool',`Ruting: ${toolName}`,{tool_name:toolName,tool_call_id:toolCallId,args_parsed:args});
   const convId=event.conversation_id||conversationId;
   const s=getSettings();
+
+  // ── end_conversation: AI avslutter samtalen ──────────────────────
+  if(toolName==='end_conversation'||toolName==='end_call'||toolName==='goodbye'){
+    const farewell=args.message||args.farewell||args.text||'Ha det bra! Samtalen avsluttes nå.';
+    addLog('info','👋 AI avslutter samtalen',{farewell});
+    dbgLog('tool','end_conversation kalt – avslutter om 3 sek',{farewell});
+    // Send farewell message back so the AI speaks it before disconnect
+    respondToTavus(convId,farewell,toolCallId);
+    // Stop after a short pause so the AI can finish speaking
+    setTimeout(()=>stopConversation(),3500);
+    return;
+  }
+
   if(toolName==='homey_tool'){
     const homeyInput=args.query||args.command||args.action||args.input||[args.device,args.value].filter(Boolean).join(' ')||lastUserUtterance||'ukjent kommando';
     const activeWh=s.webhooks.filter(w=>w.enabled!==false&&w.url);
