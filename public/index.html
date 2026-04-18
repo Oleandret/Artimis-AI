@@ -391,7 +391,7 @@ code{color:var(--accent);font-family:monospace}
             <div class="field" id="s-inactivity-row">
               <label>Auto-avslutt etter inaktivitet</label>
               <div style="display:flex;align-items:center;gap:8px">
-                <input type="number" id="s-inactivity-timeout" placeholder="60" min="10" max="600" style="width:80px">
+                <input type="number" id="s-inactivity-timeout" placeholder="0 = av" min="0" max="600" style="width:80px">
                 <span style="color:var(--muted);font-size:12px">sekunder (0 = av)</span>
               </div>
               <div style="font-size:11px;color:var(--muted);margin-top:4px">Samtalen avsluttes automatisk hvis ingen snakker på X sekunder.</div>
@@ -701,8 +701,8 @@ function getSettings() {
     absentTimeout:  parseInt(localStorage.getItem('absent_timeout')  || '0') || null,
     leftTimeout:    parseInt(localStorage.getItem('left_timeout')    || '0') || null,
     callbackUrl:    localStorage.getItem('callback_url')        || '',
-    enableEndTool:  localStorage.getItem('enable_end_tool') !== 'false', // default true
-    inactivityTimeout: parseInt(localStorage.getItem('inactivity_timeout') || '60') || 60,
+    enableEndTool:  localStorage.getItem('enable_end_tool') === 'true', // default OFF
+    inactivityTimeout: parseInt(localStorage.getItem('inactivity_timeout') || '0') || 0,
     enableRecording:    localStorage.getItem('enable_recording')     === 'true',
     enableTranscription: localStorage.getItem('enable_transcription') === 'true',
     applyGreenscreen:   localStorage.getItem('apply_greenscreen')    === 'true',
@@ -842,7 +842,7 @@ function saveSettings() {
     tavus_api_key:s.apiKey, tavus_persona_id:s.personaId, tavus_replica_id:s.replicaId,
     persona_name:s.personaName, pipeline_mode:s.pipelineMode, context_window:s.contextWindow,
     max_duration:s.maxDuration||'', absent_timeout:s.absentTimeout||'', left_timeout:s.leftTimeout||'',
-    callback_url:s.callbackUrl, enable_end_tool:s.enableEndTool, inactivity_timeout:s.inactivityTimeout||60,
+    callback_url:s.callbackUrl, enable_end_tool:s.enableEndTool, inactivity_timeout:s.inactivityTimeout||0,
     enable_recording:s.enableRecording, enable_transcription:s.enableTranscription,
     apply_greenscreen:s.applyGreenscreen, s3_bucket:s.s3Bucket, s3_region:s.s3Region,
     llm_model:s.llmModel, llm_base_url:s.llmBaseUrl, llm_custom_model:s.llmCustomModel, llm_api_key:s.llmApiKey,
@@ -876,7 +876,7 @@ function loadSettingsIntoForm() {
   sv('s-persona-name',s.personaName); sv('s-pipeline-mode',s.pipelineMode); sv('s-context-window',s.contextWindow);
   sv('s-max-duration',s.maxDuration||''); sv('s-absent-timeout',s.absentTimeout||''); sv('s-left-timeout',s.leftTimeout||'');
   sv('s-callback-url',s.callbackUrl); sv('s-callback-url-2',s.callbackUrl);
-  scb('s-enable-end-tool',s.enableEndTool); sv('s-inactivity-timeout',s.inactivityTimeout||60);
+  scb('s-enable-end-tool',s.enableEndTool); sv('s-inactivity-timeout',s.inactivityTimeout||'');
   scb('s-enable-recording',s.enableRecording); scb('s-enable-transcription',s.enableTranscription);
   scb('s-apply-greenscreen',s.applyGreenscreen); sv('s-s3-bucket',s.s3Bucket); sv('s-s3-region',s.s3Region);
   const knownModels=['tavus-gpt-oss','tavus-claude-haiku-4.5','tavus-gemini-2.5-flash','tavus-gpt-5.2','tavus-gemini-3-flash'];
@@ -1143,8 +1143,11 @@ async function startConversation(){
   dbgLog('tavus','POST /v2/conversations',{persona_id:s.personaId});
   try{
     const NORSK_LOCK='ABSOLUTT KRAV: Kommuniser KUN på norsk bokmål i hele samtalen. Aldri svar på engelsk eller andre språk. Oversett alltid engelske verktøysvar til norsk bokmål.';
+    const END_LOCK=s.enableEndTool
+      ? 'Bruk end_conversation-verktøyet KUN når brukeren eksplisitt og tydelig sier de vil avslutte (f.eks. «ha det», «adjø», «avslutt nå»). IKKE avslutt etter et vanlig svar eller spørsmål.'
+      : 'IKKE avslutt samtalen automatisk under noen omstendighet. Fortsett alltid samtalen til brukeren avslutter manuelt. Ignorer end_conversation-verktøyet selv om det finnes.';
     const userContext=s.convContext?s.convContext.trim():'';
-    const fullContext=userContext?`${NORSK_LOCK}\n\n${userContext}`:NORSK_LOCK;
+    const fullContext=[NORSK_LOCK, END_LOCK, userContext].filter(Boolean).join('\n\n');
     const body={persona_id:s.personaId,conversational_context:fullContext};
     if(s.replicaId) body.replica_id=s.replicaId;
     const props={};
