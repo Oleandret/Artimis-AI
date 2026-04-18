@@ -1229,46 +1229,81 @@ function checkFarewellPhrase(text){
 // ================================================================
 // JOIN
 // ================================================================
-// ── App-message handler (delt mellom frame og fallback callObject) ──
+// ── App-message handler ──
 function handleAppMessage(d) {
   if (!d?.event_type) return;
+
+  // Hjelpefunksjon: hent tekst fra alle mulige felt i en event
+  function extractText(obj) {
+    if (!obj) return '';
+    return obj.transcript || obj.text || obj.content || obj.utterance
+        || obj.message || obj.speech || '';
+  }
+
+  const p = d.properties || {};
+  const eventText = extractText(p) || extractText(d);
+
+  // ── Tool calls ──
   if (d.event_type === 'conversation.tool_call') {
     addLog('tool_call', 'Tool call', d);
-    dbgLog('tool', 'Tool call: ' + (d.properties?.tool_name || d.properties?.name || '?'), { raw_event: d });
+    dbgLog('tool', 'Tool call: ' + (p.tool_name || p.name || '?'), { raw_event: d });
     handleToolCall(d);
+
+  // ── Sluttlig transkripsjon (replica ELLER bruker) ──
   } else if (d.event_type === 'conversation.utterance') {
-    const role = d.properties?.role || d.role;
-    const text = d.properties?.transcript || d.properties?.text || '';
+    const role = p.role || d.role || '';
+    const text = extractText(p) || extractText(d);
+    dbgLog('daily', `utterance [${role}]: "${text.slice(0,80)}"`, p);
     if (role === 'user' && text) {
       lastUserUtterance = text;
-      checkFarewellPhrase(text); // ← sjekk farvel på hvert bruker-utsagn
+      checkFarewellPhrase(text);
+    } else if (!role && text) {
+      // Ukjent rolle – prøv farvel uansett
+      checkFarewellPhrase(text);
     }
-    if (text) addTranscriptLine(role, text);
-    addLog('incoming', 'Tavus: ' + d.event_type, d.properties || {});
+    if (text) addTranscriptLine(role || 'user', text);
+    addLog('incoming', 'Tavus: utterance', { role, text: text.slice(0,100) });
     resetInactivityTimer();
-  } else {
-    const p = d.properties || {};
-    const eventText = p.transcript || p.text || p.content || '';
-    if (['conversation.echo','conversation.transcription'].includes(d.event_type)) {
-      const role = p.role || 'user';
-      if (eventText) {
-        addTranscriptLine(role, eventText);
-        if (role === 'user') checkFarewellPhrase(eventText); // ← sjekk her også
-      }
-      dbgLog('daily', `${d.event_type}: "${eventText.slice(0,80)}"`, p);
-    } else if (d.event_type === 'conversation.replica.stopped_speaking') {
-      if (eventText) addTranscriptLine('replica', eventText);
-      dbgLog('daily', 'replica: ' + eventText.slice(0,80), p);
-      resetInactivityTimer();
-    } else if (d.event_type === 'conversation.user.stopped_speaking') {
-      if (eventText) { addTranscriptLine('user', eventText); lastUserUtterance = eventText; }
-      dbgLog('daily', 'bruker: ' + eventText.slice(0,80), p);
-      resetInactivityTimer();
-      checkFarewellPhrase(eventText); // ← sjekk her også (backup)
-    } else {
-      addLog('incoming', 'Tavus: ' + d.event_type, p);
-      dbgLog('daily', 'Daily event: ' + d.event_type, p);
+
+  // ── Streaming transkripsjon (brukeren snakker nå) ──
+  } else if (d.event_type === 'conversation.utterance.streaming') {
+    const role = p.role || d.role || 'user';
+    const text = extractText(p) || extractText(d);
+    if (role === 'user' || role === '') {
+      // Oppdater lastUserUtterance løpende
+      if (text) lastUserUtterance = text;
+      // Sjekk farvel i streaming – "ha det" er kort nok til å vises i delvis transkripsjon
+      checkFarewellPhrase(text);
     }
+    dbgLog('daily', `streaming [${role}]: "${text.slice(0,60)}"`, {});
+
+  // ── Bruker sluttet å snakke – bruk siste kjente tekst ──
+  } else if (d.event_type === 'conversation.user.stopped_speaking') {
+    const text = eventText || lastUserUtterance;
+    if (eventText) { addTranscriptLine('user', eventText); lastUserUtterance = eventText; }
+    dbgLog('daily', `user.stopped: "${text.slice(0,80)}"`, p);
+    resetInactivityTimer();
+    checkFarewellPhrase(text); // Bruk siste kjente tale som fallback
+
+  // ── Replica sluttet å snakke ──
+  } else if (d.event_type === 'conversation.replica.stopped_speaking') {
+    if (eventText) addTranscriptLine('replica', eventText);
+    dbgLog('daily', `replica.stopped: "${eventText.slice(0,80)}"`, p);
+    resetInactivityTimer();
+
+  // ── Echo / transkripsjon ──
+  } else if (['conversation.echo','conversation.transcription'].includes(d.event_type)) {
+    const role = p.role || 'user';
+    if (eventText) {
+      addTranscriptLine(role, eventText);
+      if (role === 'user') checkFarewellPhrase(eventText);
+    }
+    dbgLog('daily', `${d.event_type} [${role}]: "${eventText.slice(0,80)}"`, p);
+
+  // ── Alt annet – logg rådata for debugging ──
+  } else {
+    addLog('incoming', 'Tavus: ' + d.event_type, p);
+    dbgLog('daily', d.event_type + (eventText ? ': "'+eventText.slice(0,60)+'"' : ''), p);
   }
 }
 
@@ -1346,7 +1381,11 @@ async function startDailyListener(url){
       dbgLog('daily','✅ headless joined – lytter på app-message',{});
     });
     call.on('app-message',evt=>{
-      dbgLog('daily','📨 app-message mottatt',{data:evt?.data,fromId:evt?.fromId});
+      // Logg rå event for debugging – JSON.stringify for å se alle felt
+      const raw=evt?.data;
+      const evtType=raw?.event_type||'?';
+      const evtPreview=JSON.stringify(raw)?.slice(0,200)||'tom';
+      dbgLog('daily',`📨 ${evtType}`,{preview:evtPreview,fromId:evt?.fromId});
       handleAppMessage(evt?.data);
     });
     call.on('participant-joined',evt=>{
